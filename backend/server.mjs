@@ -4,8 +4,9 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { createClient } from '@supabase/supabase-js';
 import { rateLimit } from 'express-rate-limit';
+import { chooseModel } from './model-router.mjs';
 
-const required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL'];
+const required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'AI_BASE_URL', 'AI_API_KEY'];
 const missing = required.filter((key) => !process.env[key]);
 if (missing.length) {
   console.error(`Missing required environment variables: ${missing.join(', ')}`);
@@ -90,6 +91,7 @@ app.post('/chat', requireUser, chatLimiter, async (req, res) => {
     'For high-stakes medical, legal, financial, or safety topics, provide careful general information and encourage qualified help when appropriate.',
   ].join(' ');
 
+  const routing = chooseModel(messages.at(-1).content);
   const baseUrl = process.env.AI_BASE_URL.replace(/\/+$/, '');
   const endpoint = `${baseUrl}/chat/completions`;
   const controller = new AbortController();
@@ -102,10 +104,11 @@ app.post('/chat', requireUser, chatLimiter, async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: process.env.AI_MODEL,
+        model: routing.model,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        max_tokens: maxOutputTokens,
-        temperature: 0.7,
+        max_completion_tokens: maxOutputTokens,
+        reasoning_effort: routing.tier === 'complex' ? 'medium' : routing.tier === 'balanced' ? 'low' : 'none',
+        ...(process.env.AI_SERVICE_TIER === 'fast' ? { service_tier: 'fast' } : {}),
       }),
       signal: controller.signal,
     });
@@ -120,7 +123,7 @@ app.post('/chat', requireUser, chatLimiter, async (req, res) => {
       console.error('Unexpected AI provider response format');
       return res.status(502).json({ error: 'The AI provider returned an unexpected response.' });
     }
-    return res.json({ reply: reply.trim() });
+    return res.json({ reply: reply.trim(), modelTier: routing.tier });
   } catch (error) {
     const timedOut = error.name === 'AbortError';
     console.error('AI request failed:', timedOut ? 'Request timed out' : error.message);
