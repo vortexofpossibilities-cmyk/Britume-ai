@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { createClient } from '@supabase/supabase-js';
 import { rateLimit } from 'express-rate-limit';
+import multer from 'multer';
 import { chooseModel } from './model-router.mjs';
 
 const required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'AI_BASE_URL', 'AI_API_KEY'];
@@ -34,6 +35,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '1mb' }));
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024, files: 1 } });
 
 const chatLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -59,7 +61,7 @@ async function requireUser(req, res, next) {
   }
 }
 
-app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'BRITUME API', version: 'v3' }));
+app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'BRITUME API', version: 'v4', features: ['chat', 'history', 'voice-transcription', 'image-generation'] }));
 
 // A user-scoped Supabase client makes every database request subject to RLS.
 function userDatabase(token) {
@@ -205,7 +207,79 @@ app.post('/chat', requireUser, chatLimiter, async (req, res) => {
   }
 });
 
+
+
+// V4: transcribe short voice notes. The OpenAI key remains on this server.
+const mediaLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user.id,
+  message: { error: 'Media requests are temporarily limited. Please try again shortly.' },
+});
+
+app.post('/audio/transcriptions', requireUser, mediaLimiter, audioUpload.single('file'), async (req, res) => {
+  if (!req.file?.buffer?.length) return res.status(400).json({ error: 'Record a voice message before transcribing.' });
+  const allowed = new Set(['audio/webm', 'audio/mp4', 'audio/m4a', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/ogg', 'video/webm']);
+  const mime = (req.file.mimetype || 'audio/webm').toLowerCase();
+  if (!allowed.has(mime)) return res.status(415).json({ error: 'Unsupported audio format. Please record again.' });
+  try {
+    const form = new FormData();
+    const ext = mime.includes('mp4') || mime.includes('m4a') ? 'm4a' : mime.includes('mpeg') ? 'mp3' : mime.includes('wav') ? 'wav' : mime.includes('ogg') ? 'ogg' : 'webm';
+    form.append('file', new Blob([req.file.buffer], { type: mime }), `britume-voice.${ext}`);
+    form.append('model', process.env.AI_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe');
+    const response = await fetch(`${process.env.AI_BASE_URL.replace(/\/+$/, '')}/audio/transcriptions`, {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.AI_API_KEY}` }, body: form,
+      signal: AbortSignal.timeout(60000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error('Transcription provider error:', response.status, payload?.error?.message || 'Unknown error');
+      return res.status(502).json({ error: 'BRITUME could not transcribe that recording. Please try again.' });
+    }
+    if (typeof payload.text !== 'string' || !payload.text.trim()) return res.status(502).json({ error: 'No speech was detected. Try speaking a little closer to the microphone.' });
+    return res.json({ text: payload.text.trim() });
+  } catch (error) {
+    console.error('Transcription request failed:', error.message);
+    return res.status(502).json({ error: 'Voice transcription is temporarily unavailable.' });
+  }
+});
+
+// V4: generate one image at low quality by default to control launch costs.
+app.post('/images/generate', requireUser, mediaLimiter, async (req, res) => {
+  const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
+  if (!prompt || prompt.length > 2000) return res.status(400).json({ error: 'Enter an image description of up to 2,000 characters.' });
+  try {
+    const response = await fetch(`${process.env.AI_BASE_URL.replace(/\/+$/, '')}/images/generations`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.AI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.AI_IMAGE_MODEL || 'gpt-image-1',
+        prompt,
+        n: 1,
+        size: '1024x1024',
+        quality: process.env.AI_IMAGE_QUALITY || 'low',
+        output_format: 'png',
+      }),
+      signal: AbortSignal.timeout(90000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error('Image provider error:', response.status, payload?.error?.message || 'Unknown error');
+      return res.status(502).json({ error: 'BRITUME could not generate that image. Check API access and try again.' });
+    }
+    const image = payload?.data?.[0]?.b64_json;
+    if (typeof image !== 'string' || !image.length) return res.status(502).json({ error: 'The image service returned an unexpected response.' });
+    return res.json({ image, mimeType: 'image/png', model: process.env.AI_IMAGE_MODEL || 'gpt-image-1' });
+  } catch (error) {
+    console.error('Image generation failed:', error.message);
+    return res.status(502).json({ error: 'Image generation is temporarily unavailable.' });
+  }
+});
+
 app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Audio recording must be 20 MB or smaller.' : 'Invalid audio upload.' });
   if (error.message === 'Origin not allowed by CORS') return res.status(403).json({ error: 'This app origin is not allowed.' });
   if (error instanceof SyntaxError) return res.status(400).json({ error: 'Invalid JSON request.' });
   console.error('Server error:', error.message);
