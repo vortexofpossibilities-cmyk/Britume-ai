@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -17,6 +19,13 @@ export default function Chat() {
   const [sending, setSending] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [imageMode, setImageMode] = useState(false);
+  const [imagePrompt, setImagePrompt] = useState('');
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const recordingRef = useRef<Audio.Recording | null>(null);
   const base = process.env.EXPO_PUBLIC_API_BASE_URL;
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
@@ -105,6 +114,70 @@ export default function Chat() {
     } finally { setSending(false); }
   }
 
+  async function toggleRecording() {
+    if (recording || transcribing) return;
+    try {
+      if (!recordingRef.current) {
+        const permission = await Audio.requestPermissionsAsync();
+        if (!permission.granted) { Alert.alert('Microphone permission', 'Allow microphone access to dictate a message.'); return; }
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, shouldDuckAndroid: true });
+        const created = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+        recordingRef.current = created.recording;
+        setRecording(true);
+        return;
+      }
+      const current = recordingRef.current;
+      setRecording(false);
+      setTranscribing(true);
+      await current.stopAndUnloadAsync();
+      const uri = current.getURI();
+      recordingRef.current = null;
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      if (!uri) throw new Error('The recording could not be opened. Please try again.');
+      const { data: { session } } = await supabase!.auth.getSession();
+      if (!session?.access_token || !base) throw new Error('Sign in and connect the BRITUME backend first.');
+      let response: Response;
+      if (Platform.OS === 'web') {
+        const blob = await (await fetch(uri)).blob();
+        const form = new FormData();
+        form.append('file', blob, 'britume-voice.webm');
+        response = await fetch(`${base}/audio/transcriptions`, { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` }, body: form });
+      } else {
+        const upload = await FileSystem.uploadAsync(`${base}/audio/transcriptions`, uri, {
+          httpMethod: 'POST', uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'file', mimeType: 'audio/m4a',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const parsed = JSON.parse(upload.body || '{}');
+        if (upload.status < 200 || upload.status >= 300) throw new Error(parsed.error || 'Voice transcription failed.');
+        setInput((currentText) => currentText ? `${currentText} ${parsed.text || ''}` : (parsed.text || ''));
+        return;
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Voice transcription failed.');
+      setInput((currentText) => currentText ? `${currentText} ${data.text || ''}` : (data.text || ''));
+    } catch (e: any) {
+      Alert.alert('Voice typing', e.message || 'Could not record audio.');
+      recordingRef.current = null;
+      setRecording(false);
+      try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }); } catch {}
+    } finally { setTranscribing(false); }
+  }
+
+  async function generateImage() {
+    const prompt = imagePrompt.trim();
+    if (!prompt || generatingImage) return;
+    setGeneratingImage(true);
+    setGeneratedImage(null);
+    try {
+      const data = await api('/images/generate', { method: 'POST', body: JSON.stringify({ prompt }) });
+      if (!data?.image) throw new Error('No image was returned.');
+      setGeneratedImage(`data:${data.mimeType || 'image/png'};base64,${data.image}`);
+      setImageMode(false);
+    } catch (e: any) { Alert.alert('Image generation', e.message || 'Could not generate the image.'); }
+    finally { setGeneratingImage(false); }
+  }
+
   async function pickImage() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) { Alert.alert('Permission needed', 'Allow photo access to attach an image.'); return; }
@@ -147,14 +220,28 @@ export default function Chat() {
       </View>
     } />}
 
+    {!showHistory && generatedImage && <View style={{ paddingHorizontal: 18, paddingTop: 12 }}>
+      <Text style={{ color: blue, fontWeight: '700', marginBottom: 8 }}>GENERATED IMAGE</Text>
+      <Image source={{ uri: generatedImage }} resizeMode="contain" style={{ width: '100%', height: 260, borderRadius: 14, backgroundColor: '#20242B' }} />
+      <Pressable onPress={() => setGeneratedImage(null)}><Text style={{ color: muted, marginTop: 6 }}>Close preview</Text></Pressable>
+    </View>}
     {!showHistory && <View style={{ padding: 14, paddingBottom: Platform.OS === 'web' ? 16 : 26 }}>
       <View style={{ backgroundColor: panel, borderRadius: 18, borderWidth: 1, borderColor: '#3A414D', padding: 12 }}>
+        {imageMode && <View style={{ marginBottom: 10 }}>
+          <Text style={{ color: blue, fontWeight: '700', marginBottom: 6 }}>IMAGE GENERATOR</Text>
+          <TextInput value={imagePrompt} onChangeText={setImagePrompt} placeholder="Describe the image you want…" placeholderTextColor="#818A98" multiline style={{ color: white, minHeight: 52, maxHeight: 100, borderWidth: 1, borderColor: '#3A414D', borderRadius: 10, padding: 10 }} />
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 8 }}>
+            <Pressable onPress={() => setImageMode(false)}><Text style={{ color: muted, padding: 8 }}>Cancel</Text></Pressable>
+            <Pressable onPress={generateImage} disabled={generatingImage || !imagePrompt.trim()} style={{ backgroundColor: red, borderRadius: 9, paddingHorizontal: 14, paddingVertical: 9, opacity: generatingImage || !imagePrompt.trim() ? .45 : 1 }}><Text style={{ color: white, fontWeight: '700' }}>{generatingImage ? 'Creating…' : 'Generate image'}</Text></Pressable>
+          </View>
+        </View>}
         <TextInput value={input} onChangeText={setInput} placeholder="Ask BRITUME anything…" placeholderTextColor="#818A98" multiline style={{ color: white, minHeight: 42, maxHeight: 120, fontSize: 16, padding: 4 }} />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-          <View style={{ flexDirection: 'row', gap: 18 }}>
-            <Pressable onPress={pickImage}><Text style={{ color: muted, fontSize: 20 }}>▧</Text></Pressable>
-            <Pressable onPress={pickDocument}><Text style={{ color: muted, fontSize: 20 }}>＋</Text></Pressable>
-            <Pressable onPress={() => Alert.alert('Voice typing', 'Microphone transcription will be connected in a later build step.')}><Text style={{ color: red, fontSize: 19 }}>◉</Text></Pressable>
+          <View style={{ flexDirection: 'row', gap: 16 }}>
+            <Pressable onPress={pickImage}><Text style={{ color: muted, fontSize: 19 }}>▧</Text></Pressable>
+            <Pressable onPress={pickDocument}><Text style={{ color: muted, fontSize: 19 }}>＋</Text></Pressable>
+            <Pressable onPress={toggleRecording} disabled={transcribing}><Text style={{ color: recording ? red : muted, fontSize: 18 }}>{recording ? '■ Stop' : transcribing ? '…' : '◉ Voice'}</Text></Pressable>
+            <Pressable onPress={() => setImageMode((v) => !v)}><Text style={{ color: blue, fontSize: 16 }}>Image</Text></Pressable>
           </View>
           <Pressable onPress={send} disabled={sending || !input.trim()} style={{ backgroundColor: blue, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, opacity: sending || !input.trim() ? .45 : 1 }}>
             <Text style={{ color: 'white', fontWeight: '700' }}>{sending ? '…' : 'Send ↑'}</Text>
