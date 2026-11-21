@@ -133,3 +133,30 @@ V4 adds authenticated backend endpoints for speech-to-text (`POST /audio/transcr
 ### Cost and limitations
 
 Voice transcription and image generation are billed separately by the API provider. The app does not start recording until the user taps Voice, and the user must stop recording before transcription. Image generation is user-triggered and uses low quality by default. Provider access, regional availability, and current pricing must be checked in your API account. Generated images are not yet persisted; durable image history and download controls are future work.
+
+## V5 — Web intelligence and productivity
+
+V5 adds an authenticated `POST /research` endpoint and a **Web Search** switch in the chat composer. In Web mode, BRITUME uses the OpenAI Responses API with the hosted `web_search` tool, requires a search call, collects URL-citation annotations, and stores the answer plus source URLs in the user's existing conversation history. Paste a public webpage URL into the research prompt to request a page summary; BRITUME asks the model to inspect it and disclose if it cannot access it.
+
+### V5 configuration
+
+Add these backend variables (the API key remains server-side):
+
+```env
+AI_RESEARCH_MODEL=gpt-6.2-astra
+AI_RESEARCH_MAX_OUTPUT_TOKENS=1800
+```
+
+The configured model must be available to your OpenAI API project and support Responses API web search. The research feature uses `/v1/responses`, not the legacy Chat Completions endpoint. It is separately rate-limited to four research requests per user per minute. Search calls and model output incur API charges; keep a usage budget and monitor the OpenAI usage dashboard.
+
+### V5 security notes
+
+- Research is authenticated and requires ownership of the target conversation.
+- Research requests are rate-limited and bounded in length/output.
+- Webpage and search-result text is explicitly treated as untrusted content; instructions embedded in pages must not be followed.
+- URLs are validated as public HTTP(S) URLs and are passed to the model's hosted search tool; the BRITUME server does not fetch arbitrary URLs itself.
+- Source URLs are retained in the assistant message so citations remain available in chat history.
+
+### V5 validation
+
+Run `npm test` and `npm run check` in `backend/`. Live research requires valid Supabase configuration, an OpenAI API key, and a project/model with Responses API web search access. Test a current-events question, a pasted public URL, an inaccessible URL, and a request without a valid session before launch.
