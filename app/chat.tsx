@@ -32,8 +32,8 @@ export default function Chat() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
         body: JSON.stringify({ messages: next.map(({ role, text }) => ({ role, content: text })) })
       });
-      if (!response.ok) throw new Error(`AI service returned ${response.status}`);
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? `AI service returned ${response.status}`);
       setMessages([...next, { id: String(Date.now()+1), role: 'assistant', text: data.reply ?? 'I could not read the response.' }]);
     } catch (e: any) {
       setMessages([...next, { id: String(Date.now()+1), role: 'assistant', text: `BRITUME setup: ${e.message}` }]);
