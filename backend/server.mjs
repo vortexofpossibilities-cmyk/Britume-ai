@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -15,6 +16,13 @@ if (missing.length) {
 }
 
 const app = express();
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && (!process.env.CORS_ORIGINS || process.env.CORS_ORIGINS.split(',').some((x) => x.trim() === '*'))) {
+  console.error('Production requires explicit CORS_ORIGINS; wildcard CORS is not allowed.');
+  process.exit(1);
+}
+const trustProxy = Number(process.env.TRUST_PROXY_HOPS || 0);
+if (Number.isInteger(trustProxy) && trustProxy > 0) app.set('trust proxy', trustProxy);
 const port = Number(process.env.PORT || 8787);
 const maxMessages = Math.min(Math.max(Number(process.env.MAX_MESSAGES || 30), 1), 60);
 const maxOutputTokens = Math.min(Math.max(Number(process.env.MAX_OUTPUT_TOKENS || 1200), 128), 4000);
@@ -24,7 +32,14 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANO
 
 const configuredOrigins = (process.env.CORS_ORIGINS || '')
   .split(',').map((origin) => origin.trim()).filter(Boolean);
-app.use(helmet());
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  const supplied = req.headers['x-request-id'];
+  req.requestId = typeof supplied === 'string' && /^[a-zA-Z0-9._-]{8,80}$/.test(supplied) ? supplied : crypto.randomUUID();
+  res.setHeader('X-Request-Id', req.requestId);
+  next();
+});
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
   origin(origin, callback) {
     // Native mobile requests commonly have no Origin header.
@@ -34,7 +49,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '256kb', strict: true }));
 const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024, files: 1 } });
 
 const chatLimiter = rateLimit({
@@ -61,7 +76,7 @@ async function requireUser(req, res, next) {
   }
 }
 
-app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'BRITUME API', version: 'v5', features: ['chat', 'history', 'voice-transcription', 'image-generation', 'web-research', 'url-summaries'] }));
+app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'BRITUME API', version: 'v6', features: ['chat', 'history', 'voice-transcription', 'image-generation', 'web-research', 'url-summaries'] }));
 
 // A user-scoped Supabase client makes every database request subject to RLS.
 function userDatabase(token) {
@@ -361,4 +376,8 @@ app.use((error, _req, res, _next) => {
   return res.status(500).json({ error: 'An unexpected server error occurred.' });
 });
 
-app.listen(port, () => console.log(`BRITUME API listening on port ${port}`));
+app.listen(port, () => console.log(JSON.stringify({ event: 'server_started', service: 'BRITUME API', version: 'v6', port, environment: process.env.NODE_ENV || 'development' })));
+
+// Keep process-level failures visible to the host monitor without exposing secrets.
+process.on('unhandledRejection', (reason) => console.error(JSON.stringify({ event: 'unhandled_rejection', message: reason instanceof Error ? reason.message : 'Non-error rejection' })));
+process.on('uncaughtException', (error) => { console.error(JSON.stringify({ event: 'uncaught_exception', message: error.message })); process.exit(1); });
