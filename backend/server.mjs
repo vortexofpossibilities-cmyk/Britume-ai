@@ -30,7 +30,7 @@ app.use(cors({
     if (!origin || configuredOrigins.includes('*') || configuredOrigins.includes(origin)) return callback(null, true);
     return callback(new Error('Origin not allowed by CORS'));
   },
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '1mb' }));
@@ -59,7 +59,55 @@ async function requireUser(req, res, next) {
   }
 }
 
-app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'BRITUME API' }));
+app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'BRITUME API', version: 'v3' }));
+
+// A user-scoped Supabase client makes every database request subject to RLS.
+function userDatabase(token) {
+  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+}
+function bearerToken(req) {
+  const header = req.headers.authorization || '';
+  return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+}
+
+app.get('/conversations', requireUser, async (req, res) => {
+  const db = userDatabase(bearerToken(req));
+  const { data, error } = await db.from('conversations')
+    .select('id,title,created_at,updated_at').eq('user_id', req.user.id)
+    .order('updated_at', { ascending: false }).limit(100);
+  if (error) return res.status(500).json({ error: 'Could not load your conversation history. Check that the V3 database migration is installed.' });
+  return res.json({ conversations: data ?? [] });
+});
+
+app.post('/conversations', requireUser, async (req, res) => {
+  const title = typeof req.body?.title === 'string' ? req.body.title.trim().slice(0, 80) : 'New conversation';
+  const db = userDatabase(bearerToken(req));
+  const { data, error } = await db.from('conversations')
+    .insert({ user_id: req.user.id, title: title || 'New conversation' })
+    .select('id,title,created_at,updated_at').single();
+  if (error) return res.status(500).json({ error: 'Could not create a conversation. Check that the V3 database migration is installed.' });
+  return res.status(201).json({ conversation: data });
+});
+
+app.get('/conversations/:id/messages', requireUser, async (req, res) => {
+  const db = userDatabase(bearerToken(req));
+  const { data, error } = await db.from('messages')
+    .select('id,role,content,created_at').eq('conversation_id', req.params.id)
+    .eq('user_id', req.user.id).order('created_at', { ascending: true }).limit(500);
+  if (error) return res.status(500).json({ error: 'Could not load this conversation.' });
+  return res.json({ messages: (data ?? []).map((m) => ({ ...m, text: m.content })) });
+});
+
+app.delete('/conversations/:id', requireUser, async (req, res) => {
+  const db = userDatabase(bearerToken(req));
+  const { error } = await db.from('conversations').delete()
+    .eq('id', req.params.id).eq('user_id', req.user.id);
+  if (error) return res.status(500).json({ error: 'Could not delete this conversation.' });
+  return res.status(204).end();
+});
 
 app.post('/chat', requireUser, chatLimiter, async (req, res) => {
   const incoming = req.body?.messages;
@@ -80,6 +128,22 @@ app.post('/chat', requireUser, chatLimiter, async (req, res) => {
   }
   if (messages.at(-1)?.role !== 'user') {
     return res.status(400).json({ error: 'The latest message must be from you.' });
+  }
+  const conversationId = req.body?.conversationId;
+  if (typeof conversationId !== 'string' || !/^[0-9a-f-]{36}$/i.test(conversationId)) {
+    return res.status(400).json({ error: 'A valid conversationId is required.' });
+  }
+  const db = userDatabase(bearerToken(req));
+  const { data: ownedConversation, error: ownershipError } = await db.from('conversations')
+    .select('id,title').eq('id', conversationId).eq('user_id', req.user.id).maybeSingle();
+  if (ownershipError || !ownedConversation) return res.status(404).json({ error: 'Conversation not found.' });
+  const latestUserText = messages.at(-1).content;
+  const { error: userSaveError } = await db.from('messages').insert({
+    conversation_id: conversationId, user_id: req.user.id, role: 'user', content: latestUserText,
+  });
+  if (userSaveError) return res.status(500).json({ error: 'Could not save your message. Please try again.' });
+  if (ownedConversation.title === 'New conversation') {
+    await db.from('conversations').update({ title: latestUserText.slice(0, 60) }).eq('id', conversationId).eq('user_id', req.user.id);
   }
 
   const systemPrompt = [
@@ -123,7 +187,15 @@ app.post('/chat', requireUser, chatLimiter, async (req, res) => {
       console.error('Unexpected AI provider response format');
       return res.status(502).json({ error: 'The AI provider returned an unexpected response.' });
     }
-    return res.json({ reply: reply.trim(), modelTier: routing.tier });
+    const cleanReply = reply.trim();
+    const { error: assistantSaveError } = await db.from('messages').insert({
+      conversation_id: conversationId, user_id: req.user.id, role: 'assistant', content: cleanReply,
+    });
+    if (assistantSaveError) {
+      console.error('Assistant message persistence failed:', assistantSaveError.message);
+      return res.status(502).json({ error: 'BRITUME replied, but could not save the response. Please reload this conversation.' });
+    }
+    return res.json({ reply: cleanReply, modelTier: routing.tier });
   } catch (error) {
     const timedOut = error.name === 'AbortError';
     console.error('AI request failed:', timedOut ? 'Request timed out' : error.message);
