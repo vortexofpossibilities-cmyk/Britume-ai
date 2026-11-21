@@ -83,3 +83,53 @@ Success response: `{ "reply": "Hello! I'm BRITUME." }`. Errors return `{ "error"
 - Dark textured graphite, restrained red/blue accents, subtle motion
 - No cards on the main assistant screen
 - Account required; no guest mode
+
+
+## V3 — Conversation memory and cloud history
+
+V3 adds per-user conversation storage and history shared by the Android and web clients. Conversation data is stored in Supabase Postgres and protected with Row Level Security (RLS). The backend verifies the user's Supabase access token and uses a user-scoped Supabase client for database operations; it does not use a service-role key.
+
+### Apply the V3 database migration
+
+1. Open your Supabase project and go to **SQL Editor**.
+2. Open `supabase/migrations/202611220001_britume_chat_history.sql` from this project.
+3. Paste the complete SQL into the editor and run it.
+4. Confirm that `conversations` and `messages` tables exist in the Table Editor and that RLS is enabled on both.
+
+### V3 API endpoints
+
+- `GET /conversations` — list the signed-in user's recent conversations.
+- `POST /conversations` — create a conversation.
+- `GET /conversations/:id/messages` — load a conversation's messages.
+- `DELETE /conversations/:id` — delete a conversation and its messages.
+- `POST /chat` — generate a reply and persist the user and assistant messages. Requires `conversationId`.
+
+The mobile/web client continues to use the existing `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`, and `EXPO_PUBLIC_API_BASE_URL` settings. The backend continues to use the server-side `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and AI provider settings in `backend/.env`. Never put the AI secret key or a Supabase service-role key in the app's public environment variables.
+
+### Verify V3
+
+1. Apply the SQL migration before starting the app.
+2. Start the backend with `cd backend && npm install && npm test && npm run check && npm start`.
+3. Start the app with `npm install && npx expo start`.
+4. Sign in, send a message, open **History**, and reopen the saved conversation.
+5. Sign in with a different test account and confirm it cannot see the first account's history.
+6. Delete a conversation and confirm it disappears from history.
+
+V3 originally saved text messages only. V4 adds opt-in voice transcription and image generation as described below; long-term personal memory summaries remain future work.
+
+
+## V4 — Voice typing and image generation
+
+V4 adds authenticated backend endpoints for speech-to-text (`POST /audio/transcriptions`) and image generation (`POST /images/generate`). The OpenAI API key stays on the backend. Voice recordings are transcribed and returned as editable text in the composer; they are not automatically sent. Image generation uses one 1024×1024 image at low quality by default to limit spend. Generated previews are currently session-only and are not saved to Supabase Storage.
+
+### V4 setup
+
+1. In `backend/`, run `npm install` (this installs `multer` for bounded audio uploads).
+2. Set `AI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe`, `AI_IMAGE_MODEL=gpt-image-1`, and `AI_IMAGE_QUALITY=low` in the backend environment. These can be changed to models enabled for your API project.
+3. Keep `AI_API_KEY` only in the backend environment. Never add it to Expo `EXPO_PUBLIC_` variables.
+4. In the app root, run `npx expo install expo-av expo-file-system` to align native packages with your Expo SDK, then restart Expo with a clean cache.
+5. Test on a real device with microphone permission, then test image generation with a short prompt. Both endpoints require a signed-in user and are rate-limited.
+
+### Cost and limitations
+
+Voice transcription and image generation are billed separately by the API provider. The app does not start recording until the user taps Voice, and the user must stop recording before transcription. Image generation is user-triggered and uses low quality by default. Provider access, regional availability, and current pricing must be checked in your API account. Generated images are not yet persisted; durable image history and download controls are future work.

@@ -1,6 +1,6 @@
 {
   "name": "britume-ai",
-  "version": "1.0.0",
+  "version": "4.0.0",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
@@ -18,7 +18,9 @@
     "react": "18.3.1",
     "react-native": "0.76.5",
     "react-native-safe-area-context": "4.12.0",
-    "react-native-screens": "~4.4.0"
+    "react-native-screens": "~4.4.0",
+    "expo-av": "~15.0.2",
+    "expo-file-system": "~18.0.4"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

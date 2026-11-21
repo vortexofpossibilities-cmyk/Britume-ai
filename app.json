@@ -3,12 +3,22 @@
     "name": "BRITUME AI",
     "slug": "britume-ai",
     "scheme": "britume",
-    "version": "1.0.0",
+    "version": "4.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "plugins": ["expo-router", "expo-image-picker", "expo-document-picker"],
-    "experiments": { "typedRoutes": true },
-    "web": { "bundler": "metro" },
-    "android": { "package": "com.britume.ai" }
+    "plugins": [
+      "expo-router",
+      "expo-image-picker",
+      "expo-document-picker"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "android": {
+      "package": "com.britume.ai"
+    }
   }
 }
