@@ -6,7 +6,7 @@ A shared Expo + React Native codebase for Android and web, with a separate Node.
 
 - Android/web app shell and account entry: scaffolded with Expo and Supabase Auth.
 - Secure AI backend: implemented in `backend/` with Supabase access-token verification.
-- Model integration: uses an OpenAI-compatible Chat Completions endpoint; provider and model are configurable on the server.
+- Model integration: OpenAI model router selects an economy, balanced, or complex model from the latest user request; all model IDs are configurable on the server. Standard processing is the default to protect the launch budget.
 - Per-user request throttling: enabled in the API process.
 - Image/document selection UI: present; secure upload and model analysis are not implemented yet.
 - Live voice typing, conversation persistence, production deployment and device/browser testing: still to do.
@@ -38,10 +38,11 @@ Fill in `backend/.env`:
 - `SUPABASE_ANON_KEY`: your Supabase anon/public key.
 - `AI_BASE_URL`: provider API base URL, such as `https://api.openai.com/v1` for an OpenAI-compatible endpoint.
 - `AI_API_KEY`: secret key from the provider you choose.
-- `AI_MODEL`: exact model identifier supplied by that provider.
+- `AI_MODEL_ECONOMY`, `AI_MODEL_BALANCED`, `AI_MODEL_COMPLEX`: exact model IDs enabled for your API project. Defaults are GPT-6 Luna, GPT-6.1 Terra, and GPT-6.2 Sol respectively.
+- `AI_SERVICE_TIER`: leave as `standard` for lower cost; set to `fast` only when you accept the higher Fast-mode price.
 - `CORS_ORIGINS`: comma-separated web origins. Native app requests without an Origin header are accepted.
 
-Start it with `npm run dev`. The health endpoint is `http://localhost:8787/health`. The chat endpoint is `POST http://localhost:8787/chat`.
+Run `npm test` and `npm run check` to verify the router and backend syntax. Start it with `npm run dev`. The health endpoint is `http://localhost:8787/health`. The chat endpoint is `POST http://localhost:8787/chat`.
 
 For a physical Android phone, `localhost` points to the phone, not your computer. Set the app's `EXPO_PUBLIC_API_BASE_URL` to your computer's LAN IP address while both devices are on the same network, or use a deployed HTTPS backend.
 
@@ -57,7 +58,15 @@ For a physical Android phone, `localhost` points to the phone, not your computer
 }
 ```
 
-Success response: `{ "reply": "Hello! I'm BRITUME." }`. Errors return `{ "error": "..." }`. The API validates the Supabase session, accepts only user/assistant messages, limits message size and history length, applies a per-user rate limit, and times out slow model requests.
+Success response: `{ "reply": "Hello! I'm BRITUME." }`. Errors return `{ "error": "..." }`. The API validates the Supabase session, accepts only user/assistant messages, limits message size and history length, applies a per-user rate limit, routes requests across configured OpenAI models, and times out slow model requests. The router is a lightweight heuristic and should be tuned using real usage and cost data.
+
+## Model routing
+
+- Everyday requests use `AI_MODEL_ECONOMY` (GPT-6 Luna by default).
+- Detailed explanations, planning, and document/code review use `AI_MODEL_BALANCED` (GPT-6.1 Terra by default).
+- Complex coding, architecture, security audits, and long prompts use `AI_MODEL_COMPLEX` (GPT-6.2 Sol by default).
+- If a tier variable is missing, the router falls back to `AI_MODEL` when configured, then to the documented default model ID.
+- This is an initial rules-based router, not an intelligent benchmark. Check that each model ID is available to your API project before launch.
 
 ## Security notes
 
