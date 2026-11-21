@@ -1,39 +1,54 @@
-# BRITUME AI — Version 1.0 starter
+# BRITUME AI — V1 starter
 
-A shared Expo + React Native codebase intended for Android and web. It establishes the dark graphite / red / blue visual direction, account-required entry, welcome screen, chat shell, and image/document picker entry points.
+A shared Expo + React Native codebase for Android and web, with a separate Node.js API. The interface follows the dark graphite / red / blue direction and keeps the main assistant screen free of dashboard cards.
 
-## Current status
+## Current build status
 
-This is a **starter foundation**, not a finished production AI product.
-- Account screens use Supabase Auth when configured.
-- Both Android and web use the same app code.
-- The chat calls a secure backend endpoint at `POST /chat`.
-- Image/document selection UI is present, but secure upload and model analysis still need implementation.
-- Voice typing is a planned next implementation step.
-- There is no guest mode.
+- Android/web app shell and account entry: scaffolded with Expo and Supabase Auth.
+- Secure AI backend: implemented in `backend/` with Supabase access-token verification.
+- Model integration: uses an OpenAI-compatible Chat Completions endpoint; provider and model are configurable on the server.
+- Per-user request throttling: enabled in the API process.
+- Image/document selection UI: present; secure upload and model analysis are not implemented yet.
+- Live voice typing, conversation persistence, production deployment and device/browser testing: still to do.
 
-## Run locally
+This is a development milestone, not a production-ready release.
 
-1. Install Node.js (LTS).
-2. In this folder run `npm install`.
+## 1. Run the mobile/web app
+
+1. Install Node.js 20 LTS or newer.
+2. From this folder run `npm install`.
 3. Copy `.env.example` to `.env`.
-4. Create a Supabase project and set:
-   - `EXPO_PUBLIC_SUPABASE_URL`
-   - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
-5. Set `EXPO_PUBLIC_API_BASE_URL` to your backend URL.
+4. Create a Supabase project and set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
+5. Set `EXPO_PUBLIC_API_BASE_URL` to the URL where the backend is reachable.
 6. Run `npx expo start` for Android, or `npm run web` for web.
 
-## Backend contract
+## 2. Run the backend
 
-The app expects:
+In a second terminal:
 
-`POST /chat`
+```bash
+cd backend
+npm install
+cp .env.example .env
+```
 
-Headers:
-- `Authorization: Bearer <Supabase access token>`
-- `Content-Type: application/json`
+Fill in `backend/.env`:
 
-Body:
+- `SUPABASE_URL`: your Supabase project URL.
+- `SUPABASE_ANON_KEY`: your Supabase anon/public key.
+- `AI_BASE_URL`: provider API base URL, such as `https://api.openai.com/v1` for an OpenAI-compatible endpoint.
+- `AI_API_KEY`: secret key from the provider you choose.
+- `AI_MODEL`: exact model identifier supplied by that provider.
+- `CORS_ORIGINS`: comma-separated web origins. Native app requests without an Origin header are accepted.
+
+Start it with `npm run dev`. The health endpoint is `http://localhost:8787/health`. The chat endpoint is `POST http://localhost:8787/chat`.
+
+For a physical Android phone, `localhost` points to the phone, not your computer. Set the app's `EXPO_PUBLIC_API_BASE_URL` to your computer's LAN IP address while both devices are on the same network, or use a deployed HTTPS backend.
+
+## API contract
+
+`POST /chat` requires `Authorization: Bearer <Supabase access token>` and JSON:
+
 ```json
 {
   "messages": [
@@ -42,27 +57,20 @@ Body:
 }
 ```
 
-Expected response:
-```json
-{ "reply": "Hello! I'm BRITUME." }
-```
+Success response: `{ "reply": "Hello! I'm BRITUME." }`. Errors return `{ "error": "..." }`. The API validates the Supabase session, accepts only user/assistant messages, limits message size and history length, applies a per-user rate limit, and times out slow model requests.
 
-The backend must validate the Supabase JWT, enforce per-user rate limits, keep the model API key server-side, and call the selected model provider. Never put an AI provider secret in `EXPO_PUBLIC_*` or in the mobile/web client.
+## Security notes
 
-## Recommended next build steps
+- Never put `AI_API_KEY` in the Expo app, a `EXPO_PUBLIC_*` variable, source control, or a message to ChatGPT. It belongs only in the backend environment.
+- The included rate limiter is in-memory and resets when the server restarts. Use a shared store such as Redis before running multiple backend instances.
+- Configure exact production CORS origins. Do not use `*` in production.
+- Add billing/usage limits with your model provider and monitor token usage.
+- Before launch, add durable conversation storage with Supabase Row Level Security, secure file processing, safety/reporting flows, privacy controls, and automated tests.
 
-1. Add a small Node.js backend with Supabase JWT verification and model-provider adapter.
-2. Add conversation persistence (database tables with row-level security).
-3. Implement secure file upload and image/document extraction.
-4. Implement speech-to-text on web and Android with a graceful fallback.
-5. Add safety controls, age-appropriate experiences, reporting, deletion and privacy flows.
-6. Test on real Android devices and common browsers before release.
+## Brand decisions
 
-## Brand and product decisions
-
-- Product: BRITUME AI
-- Meaning: Brilliance of Possibilities
-- UI: dark textured graphite, restrained red/blue accents, neumorphic surfaces
+- **BRITUME AI** — Brilliance of Possibilities
+- Android and web
+- Dark textured graphite, restrained red/blue accents, subtle motion
 - No cards on the main assistant screen
-- Account required on both platforms; no guest access
-- Image and document support planned for V1
+- Account required; no guest mode
