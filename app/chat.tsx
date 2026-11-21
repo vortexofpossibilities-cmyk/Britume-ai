@@ -22,6 +22,7 @@ export default function Chat() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [imageMode, setImageMode] = useState(false);
+  const [researchMode, setResearchMode] = useState(false);
   const [imagePrompt, setImagePrompt] = useState('');
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [generatingImage, setGeneratingImage] = useState(false);
@@ -103,10 +104,13 @@ export default function Chat() {
         activeId = created.conversation.id;
         setConversationId(activeId);
       }
-      const data = await api('/chat', {
-        method: 'POST',
-        body: JSON.stringify({ conversationId: activeId, messages: [...messages, { role: 'user', text }].map(({ role, text: content }) => ({ role, content })) }),
-      });
+      const data = researchMode
+        ? await api('/research', { method: 'POST', body: JSON.stringify({ conversationId: activeId, question: text.replace(/https?:\/\/\S+/i, '').trim() || 'Summarize this webpage and identify its key points.', url: (text.match(/https?:\/\/\S+/i)?.[0] || '').replace(/[),.]+$/, '') }) })
+        : await api('/chat', {
+            method: 'POST',
+            body: JSON.stringify({ conversationId: activeId, messages: [...messages, { role: 'user', text }].map(({ role, text: content }) => ({ role, content })) }),
+          });
+      setResearchMode(false);
       setMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: 'assistant', text: data.reply ?? 'I could not read the response.' }]);
       await refreshConversations();
     } catch (e: any) {
@@ -235,16 +239,17 @@ export default function Chat() {
             <Pressable onPress={generateImage} disabled={generatingImage || !imagePrompt.trim()} style={{ backgroundColor: red, borderRadius: 9, paddingHorizontal: 14, paddingVertical: 9, opacity: generatingImage || !imagePrompt.trim() ? .45 : 1 }}><Text style={{ color: white, fontWeight: '700' }}>{generatingImage ? 'Creating…' : 'Generate image'}</Text></Pressable>
           </View>
         </View>}
-        <TextInput value={input} onChangeText={setInput} placeholder="Ask BRITUME anything…" placeholderTextColor="#818A98" multiline style={{ color: white, minHeight: 42, maxHeight: 120, fontSize: 16, padding: 4 }} />
+        <TextInput value={input} onChangeText={setInput} placeholder={researchMode ? "Research a topic or paste a webpage URL…" : "Ask BRITUME anything…"} placeholderTextColor="#818A98" multiline style={{ color: white, minHeight: 42, maxHeight: 120, fontSize: 16, padding: 4 }} />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
           <View style={{ flexDirection: 'row', gap: 16 }}>
             <Pressable onPress={pickImage}><Text style={{ color: muted, fontSize: 19 }}>▧</Text></Pressable>
             <Pressable onPress={pickDocument}><Text style={{ color: muted, fontSize: 19 }}>＋</Text></Pressable>
             <Pressable onPress={toggleRecording} disabled={transcribing}><Text style={{ color: recording ? red : muted, fontSize: 18 }}>{recording ? '■ Stop' : transcribing ? '…' : '◉ Voice'}</Text></Pressable>
             <Pressable onPress={() => setImageMode((v) => !v)}><Text style={{ color: blue, fontSize: 16 }}>Image</Text></Pressable>
+            <Pressable onPress={() => setResearchMode((v) => !v)}><Text style={{ color: researchMode ? red : blue, fontSize: 16, fontWeight: researchMode ? '700' : '400' }}>Web {researchMode ? 'ON' : 'Search'}</Text></Pressable>
           </View>
           <Pressable onPress={send} disabled={sending || !input.trim()} style={{ backgroundColor: blue, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12, opacity: sending || !input.trim() ? .45 : 1 }}>
-            <Text style={{ color: 'white', fontWeight: '700' }}>{sending ? '…' : 'Send ↑'}</Text>
+            <Text style={{ color: 'white', fontWeight: '700' }}>{sending ? '…' : researchMode ? 'Research ↗' : 'Send ↑'}</Text>
           </Pressable>
         </View>
       </View>
