@@ -36,7 +36,8 @@ jobs:
         run: |
           npm install
           npx expo install react-native-web react-dom expo-asset expo-font
-          npm install query-string @opentelemetry/api
+          npm install --save-exact query-string@7.1.3
+          npm install @opentelemetry/api
 
       - name: Check Expo configuration
         run: npx expo config --type public
@@ -47,8 +48,7 @@ jobs:
       - name: Verify website output
         run: |
           if [ ! -f dist/index.html ]; then
-            echo "ERROR: dist/index.html was not generated."
-            echo "Contents of dist:"
+            echo "ERROR: dist/index.html was not generated"
             find dist -maxdepth 3 -type f || true
             exit 1
           fi
