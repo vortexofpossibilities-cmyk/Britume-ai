@@ -1,4 +1,3 @@
-
 name: Deploy BRITUME AI to GitHub Pages
 
 on:
@@ -28,13 +27,11 @@ jobs:
         with:
           node-version: 20
 
-      
-      
       - name: Install dependencies
         run: |
           npm install
           npx expo install react-native-web react-dom expo-asset expo-font
-
+          npm install query-string
 
       - name: Build Expo web app
         run: npx expo export --platform web
