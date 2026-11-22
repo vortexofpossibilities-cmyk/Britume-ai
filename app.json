@@ -1,3 +1,4 @@
+
 {
   "expo": {
     "name": "BRITUME AI",
@@ -12,10 +13,12 @@
       "expo-document-picker"
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "baseUrl": "/Britume-ai"
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "output": "static"
     },
     "android": {
       "package": "com.britume.ai"
