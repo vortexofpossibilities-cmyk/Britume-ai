@@ -29,10 +29,12 @@ jobs:
           node-version: 20
 
       
+      
       - name: Install dependencies
         run: |
           npm install
-          npx expo install react-native-web react-dom expo-asset
+          npx expo install react-native-web react-dom expo-asset expo-font
+
 
       - name: Build Expo web app
         run: npx expo export --platform web
