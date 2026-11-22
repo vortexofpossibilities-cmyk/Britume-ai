@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: 20
 
-              - name: Install dependencies
+      - name: Install dependencies
         run: |
           npm install
           npx expo install react-native-web react-dom
