@@ -1,4 +1,3 @@
-
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -95,7 +94,10 @@ Deno.serve(async (req: Request) => {
       await authClient.auth.getUser(token);
 
     if (authError || !authData.user) {
-      return error("Your session is invalid or expired. Please sign in again.", 401);
+      return error(
+        "Your session is invalid or expired. Please sign in again.",
+        401,
+      );
     }
 
     const user = authData.user;
@@ -114,11 +116,12 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "");
 
+    // Health check
     if (path.endsWith("/health") && req.method === "GET") {
       return reply({
         status: "ok",
         service: "BRITUME",
-        version: "2.0",
+        version: "2.1",
       });
     }
 
@@ -294,43 +297,50 @@ Deno.serve(async (req: Request) => {
 
       let answer = "";
       let provider = "";
+      let usedModel = "";
 
-      // First provider: Groq
-      const groqKey = Deno.env.get("GROQ_API_KEY") ||
-        Deno.env.get("AI_API_KEY");
-      const groqModel = Deno.env.get("AI_MODEL") ||
-        "openai/gpt-oss-120b";
+      // PRIMARY PROVIDER: OPENAI
+      const openAIKey = Deno.env.get("OPENAI_API_KEY");
+      const openAIModel = Deno.env.get("OPENAI_MODEL") || "gpt-4o-mini";
 
-      if (groqKey) {
+      if (openAIKey) {
         try {
           answer = await askProvider(
-            Deno.env.get("AI_BASE_URL") ||
-              "https://api.groq.com/openai/v1",
-            groqKey,
-            groqModel,
+            "https://api.openai.com/v1",
+            openAIKey,
+            openAIModel,
             aiMessages,
           );
-          provider = "Groq";
+
+          provider = "OpenAI";
+          usedModel = openAIModel;
         } catch (err) {
-          console.error("Groq failed:", err);
+          console.error("OpenAI failed; trying Groq:", err);
         }
       }
 
-      // Second provider: OpenRouter backup
+      // BACKUP PROVIDER: GROQ
       if (!answer) {
-        const openRouterKey = Deno.env.get("OPENROUTER_API_KEY");
+        const groqKey = Deno.env.get("GROQ_API_KEY") ||
+          Deno.env.get("AI_API_KEY");
 
-        if (openRouterKey) {
+        const groqModel = Deno.env.get("GROQ_MODEL") ||
+          Deno.env.get("AI_MODEL") ||
+          "openai/gpt-oss-120b";
+
+        if (groqKey) {
           try {
             answer = await askProvider(
-              "https://openrouter.ai/api/v1",
-              openRouterKey,
-              Deno.env.get("OPENROUTER_MODEL") || "openrouter/free",
+              "https://api.groq.com/openai/v1",
+              groqKey,
+              groqModel,
               aiMessages,
             );
-            provider = "OpenRouter";
+
+            provider = "Groq";
+            usedModel = groqModel;
           } catch (err) {
-            console.error("OpenRouter failed:", err);
+            console.error("Groq failed:", err);
           }
         }
       }
@@ -377,14 +387,20 @@ Deno.serve(async (req: Request) => {
         });
 
       if (saveAssistantError) {
-        console.error("Save assistant message error:", saveAssistantError.message);
-        return error("BRITUME replied but could not save its response.", 500);
+        console.error(
+          "Save assistant message error:",
+          saveAssistantError.message,
+        );
+        return error(
+          "BRITUME replied but could not save its response.",
+          500,
+        );
       }
 
       return reply({
         reply: answer,
         provider,
-        model: provider === "Groq" ? groqModel : "openrouter/free",
+        model: usedModel,
       });
     }
 
