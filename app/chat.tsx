@@ -1,6 +1,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Animated, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import {
+  Alert, Animated, FlatList, Image, KeyboardAvoidingView, Modal,
+  Platform, Pressable, Text, TextInput, View,
+} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
@@ -18,17 +21,17 @@ type Palette = {
 };
 
 const LIGHT: Palette = {
-  bg: '#F7F7F4', surface: '#F5F5F2', raised: '#FFFFFF', text: '#17191D',
-  muted: '#777D86', border: '#E7E8E5', line: '#E4E5E1', input: '#F3F4F1',
-  bubbleUser: '#F8F9F7', bubbleAI: '#F1F2EF', shadow: '#BFC2C5',
+  bg: '#FAFAF7', surface: '#F7F7F4', raised: '#FFFFFF', text: '#17191D',
+  muted: '#777D86', border: '#E7E8E5', line: '#E4E5E1', input: '#F5F5F2',
+  bubbleUser: '#FFFFFF', bubbleAI: '#F5F5F2', shadow: '#BFC2C5',
   highlight: '#FFFFFF', red: '#F04455', blue: '#347BFF',
 };
 
 const DARK: Palette = {
-  bg: '#000000', surface: '#080808', raised: '#0B0B0B', text: '#F7F8FA',
+  bg: '#000000', surface: '#050505', raised: '#0A0A0A', text: '#F7F8FA',
   muted: '#9298A2', border: '#191919', line: '#171717', input: '#050505',
   bubbleUser: '#101010', bubbleAI: '#080808', shadow: '#000000',
-  highlight: '#242424', red: '#FF4058', blue: '#438BFF',
+  highlight: '#292929', red: '#FF4058', blue: '#438BFF',
 };
 
 function raised(p: Palette, radius = 20) {
@@ -61,6 +64,8 @@ function inset(p: Palette, radius = 16) {
 
 export default function Chat() {
   const [darkMode, setDarkMode] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [messageEffectsEnabled, setMessageEffectsEnabled] = useState(true);
   const p = darkMode ? DARK : LIGHT;
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -83,8 +88,11 @@ export default function Chat() {
   const base = process.env.EXPO_PUBLIC_API_BASE_URL;
 
   const flash = useCallback(() => {
+    if (!messageEffectsEnabled) return;
+
     pulse.stopAnimation();
     pulse.setValue(0);
+
     Animated.sequence([
       Animated.timing(pulse, {
         toValue: 0.16,
@@ -97,7 +105,7 @@ export default function Chat() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [pulse]);
+  }, [pulse, messageEffectsEnabled]);
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
     if (!base) throw new Error('Connect the secure BRITUME backend first.');
@@ -170,7 +178,6 @@ export default function Chat() {
 
     try {
       const data = await api(`/conversations/${item.id}/messages`);
-
       setConversationId(item.id);
 
       setMessages(
@@ -556,11 +563,18 @@ export default function Chat() {
           gap: 7,
         }}>
           <Pressable
+            onPress={() => setShowSettings(true)}
+            style={actionStyle}
+          >
+            <Text style={actionText}>⚙</Text>
+          </Pressable>
+
+          <Pressable
             onPress={() => setDarkMode(value => !value)}
             style={actionStyle}
           >
             <Text style={actionText}>
-              {darkMode ? '☀ Light' : '◐ Dark'}
+              {darkMode ? '☀' : '◐'}
             </Text>
           </Pressable>
 
@@ -973,6 +987,177 @@ export default function Chat() {
           </Text>
         </View>
       )}
+
+      <Modal
+        visible={showSettings}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.65)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 22,
+        }}>
+          <View style={{
+            ...raised(p, 28),
+            width: '100%',
+            maxWidth: 390,
+            padding: 22,
+          }}>
+            <View style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 22,
+            }}>
+              <Text style={{
+                color: p.text,
+                fontSize: 24,
+                fontWeight: '900',
+              }}>
+                Settings
+              </Text>
+
+              <Pressable
+                onPress={() => setShowSettings(false)}
+                style={actionStyle}
+              >
+                <Text style={actionText}>✕</Text>
+              </Pressable>
+            </View>
+
+            <Text style={{
+              color: p.blue,
+              fontSize: 12,
+              fontWeight: '900',
+              letterSpacing: 1.5,
+              marginBottom: 12,
+            }}>
+              APPEARANCE
+            </Text>
+
+            <View style={{
+              ...raised(p, 18),
+              padding: 16,
+              marginBottom: 18,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{
+                  color: p.text,
+                  fontSize: 15,
+                  fontWeight: '800',
+                }}>
+                  {darkMode ? 'Pure black mode' : 'Milk white mode'}
+                </Text>
+                <Text style={{
+                  color: p.muted,
+                  fontSize: 12,
+                  marginTop: 5,
+                }}>
+                  {darkMode ? 'Dark neumorphism' : 'Light neumorphism'}
+                </Text>
+              </View>
+
+              <Pressable
+                onPress={() => setDarkMode(value => !value)}
+                style={{
+                  ...raised(p, 14),
+                  backgroundColor: p.blue,
+                  borderColor: p.blue,
+                  paddingHorizontal: 15,
+                  paddingVertical: 10,
+                }}
+              >
+                <Text style={{
+                  color: '#FFFFFF',
+                  fontWeight: '900',
+                }}>
+                  {darkMode ? '☀ Light' : '◐ Dark'}
+                </Text>
+              </Pressable>
+            </View>
+
+            <Text style={{
+              color: p.blue,
+              fontSize: 12,
+              fontWeight: '900',
+              letterSpacing: 1.5,
+              marginBottom: 12,
+            }}>
+              MESSAGE EFFECTS
+            </Text>
+
+            <View style={{
+              ...raised(p, 18),
+              padding: 16,
+              marginBottom: 22,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{
+                  color: p.text,
+                  fontSize: 15,
+                  fontWeight: '800',
+                }}>
+                  Red and blue flash
+                </Text>
+                <Text style={{
+                  color: p.muted,
+                  fontSize: 12,
+                  marginTop: 5,
+                }}>
+                  Flash when messages are sent or received.
+                </Text>
+              </View>
+
+              <Pressable
+                onPress={() => setMessageEffectsEnabled(value => !value)}
+                style={{
+                  ...raised(p, 14),
+                  backgroundColor: messageEffectsEnabled ? p.blue : p.surface,
+                  borderColor: messageEffectsEnabled ? p.blue : p.border,
+                  paddingHorizontal: 15,
+                  paddingVertical: 10,
+                }}
+              >
+                <Text style={{
+                  color: messageEffectsEnabled ? '#FFFFFF' : p.text,
+                  fontWeight: '900',
+                }}>
+                  {messageEffectsEnabled ? 'ON' : 'OFF'}
+                </Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              onPress={() => setShowSettings(false)}
+              style={{
+                ...raised(p, 16),
+                backgroundColor: p.blue,
+                borderColor: p.blue,
+                padding: 14,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{
+                color: '#FFFFFF',
+                fontWeight: '900',
+                fontSize: 15,
+              }}>
+                Done
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Animated.View
         pointerEvents="none"
