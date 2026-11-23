@@ -58,11 +58,15 @@ export default function Auth() {
 
       if (result.error) {
         setMessage(result.error.message);
-      } else if (mode === 'signup' && !result.data.session) {
-        setSuccess(true);
-        setMessage('Account registered! Check your email to confirm your address, then sign in.');
-      } else {
-        router.replace('/chat');
+      } else if (!result.data.session) {
+  setSuccess(false);
+  setMessage(
+    mode === 'signup'
+      ? 'No active session was returned. Check that Confirm email is OFF in Supabase, then try again.'
+      : 'Sign-in did not create an active session. Please try again.'
+  );
+} else {
+  router.replace('/chat');
       }
     } catch (error: any) {
       setMessage(error?.message || 'Something went wrong. Please try again.');
