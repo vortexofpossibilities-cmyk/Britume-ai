@@ -105,7 +105,9 @@ export default function Chat() {
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
     if (!base) throw new Error('Connect the secure BRITUME backend first.');
-    if (!anonKey) throw new Error('Supabase public API key is missing. Please check the website configuration.');
+    if (!anonKey) {
+      throw new Error('Supabase public API key is missing. Please check the website configuration.');
+    }
 
     const { data: { session } } = await supabase!.auth.getSession();
 
@@ -260,11 +262,19 @@ export default function Chat() {
           method: 'POST',
           body: JSON.stringify({ title: text.slice(0, 60) }),
         });
-        activeId = created?.conversation?.id ?? created?.data?.conversation?.id ?? created?.data?.id ?? created?.id;
 
-if (!activeId) {
-  throw new Error('Backend did not return a conversation ID. Please check Supabase.');
-}
+        activeId =
+          created?.conversation?.id ??
+          created?.data?.conversation?.id ??
+          created?.data?.id ??
+          created?.id;
+
+        if (!activeId) {
+          throw new Error('Backend did not return a conversation ID. Please check Supabase.');
+        }
+
+        setConversationId(activeId);
+      }
 
       const data = researchMode
         ? await api('/research', {
