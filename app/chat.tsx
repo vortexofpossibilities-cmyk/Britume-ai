@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, Animated, FlatList, Image, KeyboardAvoidingView, Modal,
@@ -86,6 +87,7 @@ export default function Chat() {
   const pulse = useRef(new Animated.Value(0)).current;
   const drawerX = useRef(new Animated.Value(-310)).current;
   const base = process.env.EXPO_PUBLIC_API_BASE_URL;
+  const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
   const flash = useCallback(() => {
     if (!messageEffectsEnabled) return;
@@ -103,8 +105,10 @@ export default function Chat() {
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
     if (!base) throw new Error('Connect the secure BRITUME backend first.');
+    if (!anonKey) throw new Error('Supabase public API key is missing. Please check the website configuration.');
 
     const { data: { session } } = await supabase!.auth.getSession();
+
     if (!session?.access_token) {
       throw new Error('Your session expired. Please sign in again.');
     }
@@ -113,18 +117,22 @@ export default function Chat() {
       ...init,
       headers: {
         'Content-Type': 'application/json',
+        apikey: anonKey,
         Authorization: `Bearer ${session.access_token}`,
         ...(init.headers || {}),
       },
     });
 
     if (response.status === 204) return null;
+
     const data = await response.json().catch(() => ({}));
+
     if (!response.ok) {
       throw new Error(data.error ?? `BRITUME service returned ${response.status}`);
     }
+
     return data;
-  }, [base]);
+  }, [base, anonKey]);
 
   const refreshConversations = useCallback(async (silent = false) => {
     setLoadingHistory(!silent);
@@ -169,6 +177,7 @@ export default function Chat() {
       router.replace('/auth');
       return;
     }
+
     supabase.auth.getSession().then(async ({ data }) => {
       if (!data.session) {
         router.replace('/auth');
@@ -237,6 +246,7 @@ export default function Chat() {
     setSending(true);
     setInput('');
     flash();
+
     setMessages(current => [
       ...current,
       { id: `local-${Date.now()}`, role: 'user', text },
@@ -244,6 +254,7 @@ export default function Chat() {
 
     try {
       let activeId = conversationId;
+
       if (!activeId) {
         const created = await api('/conversations', {
           method: 'POST',
@@ -274,6 +285,7 @@ export default function Chat() {
           });
 
       setResearchMode(false);
+
       setMessages(current => [
         ...current,
         {
@@ -282,6 +294,7 @@ export default function Chat() {
           text: data.reply ?? 'I could not read the response.',
         },
       ]);
+
       flash();
       void refreshConversations(true);
     } catch (e: any) {
@@ -301,21 +314,26 @@ export default function Chat() {
 
   async function toggleRecording() {
     if (transcribing) return;
+
     try {
       if (!recordingRef.current) {
         const permission = await Audio.requestPermissionsAsync();
+
         if (!permission.granted) {
           Alert.alert('Microphone permission', 'Allow microphone access to dictate a message.');
           return;
         }
+
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true,
           playsInSilentModeIOS: true,
           shouldDuckAndroid: true,
         });
+
         const created = await Audio.Recording.createAsync(
           Audio.RecordingOptionsPresets.HIGH_QUALITY
         );
+
         recordingRef.current = created.recording;
         setRecording(true);
         return;
@@ -324,6 +342,7 @@ export default function Chat() {
       const current = recordingRef.current;
       setRecording(false);
       setTranscribing(true);
+
       await current.stopAndUnloadAsync();
       const uri = current.getURI();
       recordingRef.current = null;
@@ -332,9 +351,11 @@ export default function Chat() {
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
       });
+
       if (!uri) throw new Error('The recording could not be opened.');
 
       const { data: { session } } = await supabase!.auth.getSession();
+
       if (!session?.access_token || !base) {
         throw new Error('Sign in and connect the BRITUME backend first.');
       }
@@ -343,13 +364,20 @@ export default function Chat() {
         const blob = await (await fetch(uri)).blob();
         const form = new FormData();
         form.append('file', blob, 'britume-voice.webm');
+
         const response = await fetch(`${base}/audio/transcriptions`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${session.access_token}` },
+          headers: {
+            apikey: anonKey,
+            Authorization: `Bearer ${session.access_token}`,
+          },
           body: form,
         });
+
         const data = await response.json().catch(() => ({}));
+
         if (!response.ok) throw new Error(data.error || 'Voice transcription failed.');
+
         setInput(old => old ? `${old} ${data.text || ''}` : (data.text || ''));
       } else {
         const upload = await FileSystem.uploadAsync(
@@ -358,19 +386,26 @@ export default function Chat() {
             uploadType: FileSystem.FileSystemUploadType.MULTIPART,
             fieldName: 'file',
             mimeType: 'audio/m4a',
-            headers: { Authorization: `Bearer ${session.access_token}` },
+            headers: {
+              apikey: anonKey,
+              Authorization: `Bearer ${session.access_token}`,
+            },
           }
         );
+
         const parsed = JSON.parse(upload.body || '{}');
+
         if (upload.status < 200 || upload.status >= 300) {
           throw new Error(parsed.error || 'Voice transcription failed.');
         }
+
         setInput(old => old ? `${old} ${parsed.text || ''}` : (parsed.text || ''));
       }
     } catch (e: any) {
       Alert.alert('Voice typing', e.message || 'Could not record audio.');
       recordingRef.current = null;
       setRecording(false);
+
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
@@ -385,14 +420,18 @@ export default function Chat() {
   async function generateImage() {
     const prompt = imagePrompt.trim();
     if (!prompt || generatingImage) return;
+
     setGeneratingImage(true);
     setGeneratedImage(null);
+
     try {
       const data = await api('/images/generate', {
         method: 'POST',
         body: JSON.stringify({ prompt }),
       });
+
       if (!data?.image) throw new Error('No image was returned.');
+
       setGeneratedImage(`data:${data.mimeType || 'image/png'};base64,${data.image}`);
       setImageMode(false);
     } catch (e: any) {
@@ -404,14 +443,17 @@ export default function Chat() {
 
   async function pickImage() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Allow photo access to attach an image.');
       return;
     }
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 0.8,
     });
+
     if (!result.canceled) {
       Alert.alert(
         'Image selected',
@@ -424,6 +466,7 @@ export default function Chat() {
     const result = await DocumentPicker.getDocumentAsync({
       copyToCacheDirectory: true,
     });
+
     if (!result.canceled) {
       Alert.alert(
         'Document selected',
@@ -460,7 +503,6 @@ export default function Chat() {
     >
       <StatusBar style={darkMode ? 'light' : 'dark'} />
 
-      {/* Minimal top bar: Settings only */}
       <View style={{
         paddingHorizontal: 20,
         paddingTop: Platform.OS === 'web' ? 18 : 54,
@@ -498,7 +540,6 @@ export default function Chat() {
         height: 1, backgroundColor: p.line, marginHorizontal: 16,
       }} />
 
-      {/* Main conversation */}
       {messages.length === 0 ? (
         <View style={{
           flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28,
@@ -585,7 +626,6 @@ export default function Chat() {
         </View>
       )}
 
-      {/* Message composer */}
       <View style={{
         paddingHorizontal: 14,
         paddingTop: 10,
@@ -721,17 +761,14 @@ export default function Chat() {
         </Text>
       </View>
 
-      {/* Left-side history drawer */}
       {showHistory && (
         <View style={{
           position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
           backgroundColor: 'rgba(0,0,0,0.42)', zIndex: 20,
           flexDirection: 'row',
         }}>
-          <Pressable
-            onPress={closeHistory}
-            style={{ flex: 1 }}
-          />
+          <Pressable onPress={closeHistory} style={{ flex: 1 }} />
+
           <Animated.View style={{
             position: 'absolute', left: 0, top: 0, bottom: 0,
             width: 310, maxWidth: '86%',
@@ -813,7 +850,6 @@ export default function Chat() {
         </View>
       )}
 
-      {/* All app controls are inside Settings */}
       <Modal
         visible={showSettings}
         transparent
@@ -993,7 +1029,6 @@ export default function Chat() {
         </View>
       </Modal>
 
-      {/* Red and blue message flash */}
       <Animated.View
         pointerEvents="none"
         style={{
@@ -1012,4 +1047,4 @@ export default function Chat() {
       </Animated.View>
     </KeyboardAvoidingView>
   );
-    }
+}
