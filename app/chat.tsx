@@ -260,9 +260,11 @@ export default function Chat() {
           method: 'POST',
           body: JSON.stringify({ title: text.slice(0, 60) }),
         });
-        activeId = created.conversation.id;
-        setConversationId(activeId);
-      }
+        activeId = created?.conversation?.id ?? created?.data?.conversation?.id ?? created?.data?.id ?? created?.id;
+
+if (!activeId) {
+  throw new Error('Backend did not return a conversation ID. Please check Supabase.');
+}
 
       const data = researchMode
         ? await api('/research', {
