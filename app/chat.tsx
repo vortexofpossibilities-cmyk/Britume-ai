@@ -1,8 +1,7 @@
-
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, Animated, FlatList, Image, KeyboardAvoidingView, Modal,
-  Platform, Pressable, Text, TextInput, View,
+  PanResponder, Platform, Pressable, Text, TextInput, View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
@@ -14,10 +13,11 @@ import { supabase } from '../lib/supabase';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; updated_at: string };
+
 type Palette = {
   bg: string; surface: string; raised: string; text: string; muted: string;
-  border: string; line: string; input: string; bubbleUser: string; bubbleAI: string;
-  shadow: string; highlight: string; red: string; blue: string;
+  border: string; line: string; input: string; bubbleUser: string;
+  bubbleAI: string; shadow: string; highlight: string; red: string; blue: string;
 };
 
 const LIGHT: Palette = {
@@ -66,8 +66,6 @@ export default function Chat() {
   const [darkMode, setDarkMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [messageEffectsEnabled, setMessageEffectsEnabled] = useState(true);
-  const p = darkMode ? DARK : LIGHT;
-
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -83,26 +81,22 @@ export default function Chat() {
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [generatingImage, setGeneratingImage] = useState(false);
 
+  const p = darkMode ? DARK : LIGHT;
   const recordingRef = useRef<Audio.Recording | null>(null);
   const pulse = useRef(new Animated.Value(0)).current;
+  const drawerX = useRef(new Animated.Value(-310)).current;
   const base = process.env.EXPO_PUBLIC_API_BASE_URL;
 
   const flash = useCallback(() => {
     if (!messageEffectsEnabled) return;
-
     pulse.stopAnimation();
     pulse.setValue(0);
-
     Animated.sequence([
       Animated.timing(pulse, {
-        toValue: 0.16,
-        duration: 90,
-        useNativeDriver: true,
+        toValue: 0.16, duration: 90, useNativeDriver: true,
       }),
       Animated.timing(pulse, {
-        toValue: 0,
-        duration: 360,
-        useNativeDriver: true,
+        toValue: 0, duration: 360, useNativeDriver: true,
       }),
     ]).start();
   }, [pulse, messageEffectsEnabled]);
@@ -111,7 +105,6 @@ export default function Chat() {
     if (!base) throw new Error('Connect the secure BRITUME backend first.');
 
     const { data: { session } } = await supabase!.auth.getSession();
-
     if (!session?.access_token) {
       throw new Error('Your session expired. Please sign in again.');
     }
@@ -126,19 +119,15 @@ export default function Chat() {
     });
 
     if (response.status === 204) return null;
-
     const data = await response.json().catch(() => ({}));
-
     if (!response.ok) {
       throw new Error(data.error ?? `BRITUME service returned ${response.status}`);
     }
-
     return data;
   }, [base]);
 
   const refreshConversations = useCallback(async (silent = false) => {
     setLoadingHistory(!silent);
-
     try {
       const data = await api('/conversations');
       setConversations(data?.conversations ?? []);
@@ -149,18 +138,42 @@ export default function Chat() {
     }
   }, [api]);
 
+  function openHistory() {
+    setShowHistory(true);
+    void refreshConversations();
+    Animated.spring(drawerX, {
+      toValue: 0, useNativeDriver: true, tension: 65, friction: 12,
+    }).start();
+  }
+
+  function closeHistory() {
+    Animated.timing(drawerX, {
+      toValue: -310, duration: 220, useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setShowHistory(false);
+    });
+  }
+
+  const swipeResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        gesture.dx > 18 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dx > 65 && gesture.x0 < 55) openHistory();
+      },
+    })
+  ).current;
+
   useEffect(() => {
     if (!supabase) {
       router.replace('/auth');
       return;
     }
-
     supabase.auth.getSession().then(async ({ data }) => {
       if (!data.session) {
         router.replace('/auth');
         return;
       }
-
       await refreshConversations();
     });
   }, [refreshConversations]);
@@ -169,24 +182,21 @@ export default function Chat() {
     setConversationId(null);
     setMessages([]);
     setInput('');
-    setShowHistory(false);
+    closeHistory();
+    setShowSettings(false);
   }
 
   async function openConversation(item: Conversation) {
-    setShowHistory(false);
+    closeHistory();
     setLoadingHistory(true);
-
     try {
       const data = await api(`/conversations/${item.id}/messages`);
       setConversationId(item.id);
-
-      setMessages(
-        (data?.messages ?? []).map((m: any) => ({
-          id: m.id,
-          role: m.role,
-          text: m.content ?? m.text,
-        }))
-      );
+      setMessages((data?.messages ?? []).map((m: any) => ({
+        id: m.id,
+        role: m.role,
+        text: m.content ?? m.text,
+      })));
     } catch (e: any) {
       Alert.alert('Could not open chat', e.message);
     } finally {
@@ -195,40 +205,38 @@ export default function Chat() {
   }
 
   async function deleteConversation(item: Conversation) {
-    const remove = async () => {
-      try {
-        await api(`/conversations/${item.id}`, { method: 'DELETE' });
-
-        if (conversationId === item.id) {
-          setConversationId(null);
-          setMessages([]);
-        }
-
-        await refreshConversations();
-      } catch (e: any) {
-        Alert.alert('Could not delete chat', e.message);
-      }
-    };
-
     Alert.alert(
       'Delete conversation',
       'Delete this conversation and its messages?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: remove },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api(`/conversations/${item.id}`, { method: 'DELETE' });
+              if (conversationId === item.id) {
+                setConversationId(null);
+                setMessages([]);
+              }
+              await refreshConversations();
+            } catch (e: any) {
+              Alert.alert('Could not delete chat', e.message);
+            }
+          },
+        },
       ]
     );
   }
 
   async function send() {
     const text = input.trim();
-
     if (!text || sending) return;
 
     setSending(true);
     setInput('');
     flash();
-
     setMessages(current => [
       ...current,
       { id: `local-${Date.now()}`, role: 'user', text },
@@ -236,13 +244,11 @@ export default function Chat() {
 
     try {
       let activeId = conversationId;
-
       if (!activeId) {
         const created = await api('/conversations', {
           method: 'POST',
           body: JSON.stringify({ title: text.slice(0, 60) }),
         });
-
         activeId = created.conversation.id;
         setConversationId(activeId);
       }
@@ -252,8 +258,7 @@ export default function Chat() {
             method: 'POST',
             body: JSON.stringify({
               conversationId: activeId,
-              question:
-                text.replace(/https?:\/\/\S+/i, '').trim() ||
+              question: text.replace(/https?:\/\/\S+/i, '').trim() ||
                 'Summarize this webpage and identify its key points.',
               url: (text.match(/https?:\/\/\S+/i)?.[0] || '').replace(/[),.]+$/, ''),
             }),
@@ -262,18 +267,13 @@ export default function Chat() {
             method: 'POST',
             body: JSON.stringify({
               conversationId: activeId,
-              messages: [
-                ...messages,
-                { role: 'user', text },
-              ].map(({ role, text: content }) => ({
-                role,
-                content,
-              })),
+              messages: [...messages, { role: 'user', text }].map(
+                ({ role, text: content }) => ({ role, content })
+              ),
             }),
           });
 
       setResearchMode(false);
-
       setMessages(current => [
         ...current,
         {
@@ -282,7 +282,6 @@ export default function Chat() {
           text: data.reply ?? 'I could not read the response.',
         },
       ]);
-
       flash();
       void refreshConversations(true);
     } catch (e: any) {
@@ -294,7 +293,6 @@ export default function Chat() {
           text: `BRITUME setup: ${e.message}`,
         },
       ]);
-
       flash();
     } finally {
       setSending(false);
@@ -303,41 +301,30 @@ export default function Chat() {
 
   async function toggleRecording() {
     if (transcribing) return;
-
     try {
       if (!recordingRef.current) {
         const permission = await Audio.requestPermissionsAsync();
-
         if (!permission.granted) {
-          Alert.alert(
-            'Microphone permission',
-            'Allow microphone access to dictate a message.'
-          );
+          Alert.alert('Microphone permission', 'Allow microphone access to dictate a message.');
           return;
         }
-
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true,
           playsInSilentModeIOS: true,
           shouldDuckAndroid: true,
         });
-
         const created = await Audio.Recording.createAsync(
           Audio.RecordingOptionsPresets.HIGH_QUALITY
         );
-
         recordingRef.current = created.recording;
         setRecording(true);
         return;
       }
 
       const current = recordingRef.current;
-
       setRecording(false);
       setTranscribing(true);
-
       await current.stopAndUnloadAsync();
-
       const uri = current.getURI();
       recordingRef.current = null;
 
@@ -345,13 +332,9 @@ export default function Chat() {
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
       });
-
-      if (!uri) {
-        throw new Error('The recording could not be opened. Please try again.');
-      }
+      if (!uri) throw new Error('The recording could not be opened.');
 
       const { data: { session } } = await supabase!.auth.getSession();
-
       if (!session?.access_token || !base) {
         throw new Error('Sign in and connect the BRITUME backend first.');
       }
@@ -359,61 +342,35 @@ export default function Chat() {
       if (Platform.OS === 'web') {
         const blob = await (await fetch(uri)).blob();
         const form = new FormData();
-
         form.append('file', blob, 'britume-voice.webm');
-
         const response = await fetch(`${base}/audio/transcriptions`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
+          headers: { Authorization: `Bearer ${session.access_token}` },
           body: form,
         });
-
         const data = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          throw new Error(data.error || 'Voice transcription failed.');
-        }
-
-        setInput(currentText =>
-          currentText
-            ? `${currentText} ${data.text || ''}`
-            : (data.text || '')
-        );
+        if (!response.ok) throw new Error(data.error || 'Voice transcription failed.');
+        setInput(old => old ? `${old} ${data.text || ''}` : (data.text || ''));
       } else {
         const upload = await FileSystem.uploadAsync(
-          `${base}/audio/transcriptions`,
-          uri,
-          {
+          `${base}/audio/transcriptions`, uri, {
             httpMethod: 'POST',
             uploadType: FileSystem.FileSystemUploadType.MULTIPART,
             fieldName: 'file',
             mimeType: 'audio/m4a',
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-            },
+            headers: { Authorization: `Bearer ${session.access_token}` },
           }
         );
-
         const parsed = JSON.parse(upload.body || '{}');
-
         if (upload.status < 200 || upload.status >= 300) {
           throw new Error(parsed.error || 'Voice transcription failed.');
         }
-
-        setInput(currentText =>
-          currentText
-            ? `${currentText} ${parsed.text || ''}`
-            : (parsed.text || '')
-        );
+        setInput(old => old ? `${old} ${parsed.text || ''}` : (parsed.text || ''));
       }
     } catch (e: any) {
       Alert.alert('Voice typing', e.message || 'Could not record audio.');
-
       recordingRef.current = null;
       setRecording(false);
-
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
@@ -427,54 +384,34 @@ export default function Chat() {
 
   async function generateImage() {
     const prompt = imagePrompt.trim();
-
     if (!prompt || generatingImage) return;
-
     setGeneratingImage(true);
     setGeneratedImage(null);
-
     try {
       const data = await api('/images/generate', {
         method: 'POST',
         body: JSON.stringify({ prompt }),
       });
-
-      if (!data?.image) {
-        throw new Error('No image was returned.');
-      }
-
-      setGeneratedImage(
-        `data:${data.mimeType || 'image/png'};base64,${data.image}`
-      );
-
+      if (!data?.image) throw new Error('No image was returned.');
+      setGeneratedImage(`data:${data.mimeType || 'image/png'};base64,${data.image}`);
       setImageMode(false);
     } catch (e: any) {
-      Alert.alert(
-        'Image generation',
-        e.message || 'Could not generate the image.'
-      );
+      Alert.alert('Image generation', e.message || 'Could not generate the image.');
     } finally {
       setGeneratingImage(false);
     }
   }
 
   async function pickImage() {
-    const permission =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
-
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert(
-        'Permission needed',
-        'Allow photo access to attach an image.'
-      );
+      Alert.alert('Permission needed', 'Allow photo access to attach an image.');
       return;
     }
-
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 0.8,
     });
-
     if (!result.canceled) {
       Alert.alert(
         'Image selected',
@@ -487,7 +424,6 @@ export default function Chat() {
     const result = await DocumentPicker.getDocumentAsync({
       copyToCacheDirectory: true,
     });
-
     if (!result.canceled) {
       Alert.alert(
         'Document selected',
@@ -497,6 +433,7 @@ export default function Chat() {
   }
 
   async function signOut() {
+    setShowSettings(false);
     await supabase?.auth.signOut();
     router.replace('/auth');
   }
@@ -517,13 +454,15 @@ export default function Chat() {
 
   return (
     <KeyboardAvoidingView
+      {...swipeResponder.panHandlers}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ flex: 1, backgroundColor: p.bg }}
     >
       <StatusBar style={darkMode ? 'light' : 'dark'} />
 
+      {/* Minimal top bar: Settings only */}
       <View style={{
-        paddingHorizontal: 17,
+        paddingHorizontal: 20,
         paddingTop: Platform.OS === 'web' ? 18 : 54,
         paddingBottom: 14,
         flexDirection: 'row',
@@ -532,192 +471,60 @@ export default function Chat() {
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <View style={{
-            width: 4,
-            height: 25,
-            borderRadius: 4,
-            backgroundColor: p.red,
-            marginRight: 4,
+            width: 4, height: 25, borderRadius: 4,
+            backgroundColor: p.red, marginRight: 4,
           }} />
-
           <View style={{
-            width: 4,
-            height: 25,
-            borderRadius: 4,
-            backgroundColor: p.blue,
-            marginRight: 9,
+            width: 4, height: 25, borderRadius: 4,
+            backgroundColor: p.blue, marginRight: 9,
           }} />
-
           <Text style={{
-            color: p.text,
-            fontWeight: '900',
-            letterSpacing: 2.2,
-            fontSize: 19,
+            color: p.text, fontWeight: '900',
+            letterSpacing: 2.2, fontSize: 19,
           }}>
             BRITUME
           </Text>
         </View>
 
-        <View style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 7,
-        }}>
-          <Pressable
-            onPress={() => setShowSettings(true)}
-            style={actionStyle}
-          >
-            <Text style={actionText}>⚙</Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() => setDarkMode(value => !value)}
-            style={actionStyle}
-          >
-            <Text style={actionText}>
-              {darkMode ? '☀' : '◐'}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() => {
-              setShowHistory(value => !value);
-              if (!showHistory) void refreshConversations();
-            }}
-            style={actionStyle}
-          >
-            <Text style={actionText}>History</Text>
-          </Pressable>
-
-          <Pressable
-            onPress={startNewConversation}
-            style={actionStyle}
-          >
-            <Text style={actionText}>＋ New</Text>
-          </Pressable>
-
-          <Pressable onPress={signOut} style={actionStyle}>
-            <Text style={actionText}>Exit</Text>
-          </Pressable>
-        </View>
+        <Pressable
+          onPress={() => setShowSettings(true)}
+          style={{ ...actionStyle, paddingHorizontal: 16, paddingVertical: 12 }}
+        >
+          <Text style={{ ...actionText, fontSize: 18 }}>⚙</Text>
+        </Pressable>
       </View>
 
       <View style={{
-        height: 1,
-        backgroundColor: p.line,
-        marginHorizontal: 16,
+        height: 1, backgroundColor: p.line, marginHorizontal: 16,
       }} />
 
-      {showHistory ? (
-        <View style={{ flex: 1, padding: 20 }}>
-          <Text style={{
-            color: p.text,
-            fontSize: 22,
-            fontWeight: '800',
-            marginBottom: 16,
-          }}>
-            Your conversations
-          </Text>
-
-          {loadingHistory ? (
-            <Text style={{ color: p.muted }}>Loading history…</Text>
-          ) : conversations.length === 0 ? (
-            <Text style={{ color: p.muted }}>
-              Your saved conversations will appear here.
-            </Text>
-          ) : (
-            <FlatList
-              data={conversations}
-              keyExtractor={item => item.id}
-              renderItem={({ item }) => (
-                <View style={{
-                  ...raised(p, 16),
-                  padding: 14,
-                  marginBottom: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 12,
-                }}>
-                  <Pressable
-                    onPress={() => openConversation(item)}
-                    style={{ flex: 1 }}
-                  >
-                    <Text
-                      numberOfLines={1}
-                      style={{
-                        color: p.text,
-                        fontSize: 15,
-                        fontWeight: '600',
-                      }}
-                    >
-                      {item.title}
-                    </Text>
-
-                    <Text style={{
-                      color: p.muted,
-                      fontSize: 11,
-                      marginTop: 5,
-                    }}>
-                      {new Date(item.updated_at).toLocaleString()}
-                    </Text>
-                  </Pressable>
-
-                  <Pressable onPress={() => deleteConversation(item)}>
-                    <Text style={{ color: p.red, padding: 7 }}>
-                      Delete
-                    </Text>
-                  </Pressable>
-                </View>
-              )}
-            />
-          )}
-        </View>
-      ) : messages.length === 0 ? (
+      {/* Main conversation */}
+      {messages.length === 0 ? (
         <View style={{
-          flex: 1,
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: 28,
+          flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28,
         }}>
           <View style={{
             ...raised(p, 30),
-            paddingHorizontal: 28,
-            paddingVertical: 30,
-            alignItems: 'center',
-            maxWidth: 340,
+            paddingHorizontal: 28, paddingVertical: 30,
+            alignItems: 'center', maxWidth: 340,
           }}>
             <View style={{
-              width: 48,
-              height: 5,
-              borderRadius: 5,
-              backgroundColor: p.red,
-              marginBottom: 5,
-              alignSelf: 'flex-start',
+              width: 48, height: 5, borderRadius: 5,
+              backgroundColor: p.red, marginBottom: 5, alignSelf: 'flex-start',
             }} />
-
             <View style={{
-              width: 48,
-              height: 5,
-              borderRadius: 5,
-              backgroundColor: p.blue,
-              marginBottom: 22,
-              alignSelf: 'flex-start',
+              width: 48, height: 5, borderRadius: 5,
+              backgroundColor: p.blue, marginBottom: 22, alignSelf: 'flex-start',
             }} />
-
             <Text style={{
-              color: p.text,
-              fontSize: 28,
-              fontWeight: '800',
-              textAlign: 'center',
-              marginBottom: 12,
+              color: p.text, fontSize: 28, fontWeight: '800',
+              textAlign: 'center', marginBottom: 12,
             }}>
               Hello, I'm BRITUME.
             </Text>
-
             <Text style={{
-              color: p.muted,
-              fontSize: 15,
-              textAlign: 'center',
-              lineHeight: 24,
+              color: p.muted, fontSize: 15,
+              textAlign: 'center', lineHeight: 24,
             }}>
               Brilliance of Possibilities.{"\n"}
               Your conversations are saved securely so you can return to them on your devices.
@@ -728,29 +535,20 @@ export default function Chat() {
         <FlatList
           data={messages}
           keyExtractor={m => m.id}
-          contentContainerStyle={{
-            padding: 18,
-            gap: 15,
-            paddingBottom: 24,
-          }}
+          contentContainerStyle={{ padding: 18, gap: 15, paddingBottom: 24 }}
           renderItem={({ item }) => (
             <View style={{
               ...raised(p, 22),
               alignSelf: item.role === 'user' ? 'flex-end' : 'flex-start',
-              maxWidth: '88%',
-              padding: 15,
+              maxWidth: '88%', padding: 15,
               borderTopWidth: 2,
               borderTopColor: item.role === 'user' ? p.blue : p.highlight,
             }}>
               <View style={{
-                height: 3,
-                width: 34,
-                borderRadius: 3,
+                height: 3, width: 34, borderRadius: 3,
                 backgroundColor: item.role === 'user' ? p.blue : p.red,
-                opacity: 0.75,
-                marginBottom: 8,
+                opacity: 0.75, marginBottom: 8,
               }} />
-
               <Text style={{ color: p.text, lineHeight: 23 }}>
                 {item.text}
               </Text>
@@ -758,236 +556,264 @@ export default function Chat() {
           )}
           ListFooterComponent={sending ? (
             <View style={{
-              ...raised(p, 18),
-              alignSelf: 'flex-start',
-              paddingHorizontal: 17,
-              paddingVertical: 12,
+              ...raised(p, 18), alignSelf: 'flex-start',
+              paddingHorizontal: 17, paddingVertical: 12,
             }}>
-              <Text style={{ color: p.muted }}>
-                BRITUME is thinking…
-              </Text>
+              <Text style={{ color: p.muted }}>BRITUME is thinking…</Text>
             </View>
           ) : null}
         />
       )}
 
-      {!showHistory && generatedImage && (
+      {generatedImage && (
         <View style={{
-          ...raised(p, 20),
-          marginHorizontal: 16,
-          padding: 12,
+          ...raised(p, 20), marginHorizontal: 16, padding: 12,
         }}>
           <Text style={{
-            color: p.blue,
-            fontWeight: '800',
-            marginBottom: 8,
+            color: p.blue, fontWeight: '800', marginBottom: 8,
           }}>
             GENERATED IMAGE
           </Text>
-
           <Image
             source={{ uri: generatedImage }}
             resizeMode="contain"
-            style={{
-              width: '100%',
-              height: 250,
-              borderRadius: 15,
-            }}
+            style={{ width: '100%', height: 250, borderRadius: 15 }}
           />
-
           <Pressable onPress={() => setGeneratedImage(null)}>
-            <Text style={{ color: p.muted, marginTop: 8 }}>
-              Close preview
-            </Text>
+            <Text style={{ color: p.muted, marginTop: 8 }}>Close preview</Text>
           </Pressable>
         </View>
       )}
 
-      {!showHistory && (
-        <View style={{
-          paddingHorizontal: 14,
-          paddingTop: 10,
-          paddingBottom: Platform.OS === 'web' ? 14 : 24,
-        }}>
-          <View style={{ ...raised(p, 25), padding: 13 }}>
-            <View style={{
-              height: 2,
-              backgroundColor: p.highlight,
-              borderRadius: 2,
-              marginHorizontal: 12,
-              marginBottom: 10,
-              opacity: 0.8,
-            }} />
+      {/* Message composer */}
+      <View style={{
+        paddingHorizontal: 14,
+        paddingTop: 10,
+        paddingBottom: Platform.OS === 'web' ? 14 : 24,
+      }}>
+        <View style={{ ...raised(p, 25), padding: 13 }}>
+          <View style={{
+            height: 2, backgroundColor: p.highlight,
+            borderRadius: 2, marginHorizontal: 12,
+            marginBottom: 10, opacity: 0.8,
+          }} />
 
-            {imageMode && (
-              <View style={{ marginBottom: 10 }}>
-                <Text style={{
-                  color: p.blue,
-                  fontWeight: '800',
-                  marginBottom: 7,
-                }}>
-                  IMAGE GENERATOR
-                </Text>
-
-                <TextInput
-                  value={imagePrompt}
-                  onChangeText={setImagePrompt}
-                  placeholder="Describe the image you want…"
-                  placeholderTextColor={p.muted}
-                  multiline
-                  style={{
-                    ...inset(p, 15),
-                    color: p.text,
-                    minHeight: 54,
-                    maxHeight: 100,
-                    padding: 12,
-                  }}
-                />
-
-                <View style={{
-                  flexDirection: 'row',
-                  justifyContent: 'flex-end',
-                  gap: 10,
-                  marginTop: 9,
-                }}>
-                  <Pressable
-                    onPress={() => setImageMode(false)}
-                    style={actionStyle}
-                  >
-                    <Text style={actionText}>Cancel</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={generateImage}
-                    disabled={generatingImage || !imagePrompt.trim()}
-                    style={{
-                      ...actionStyle,
-                      backgroundColor: p.red,
-                      opacity: generatingImage || !imagePrompt.trim() ? 0.45 : 1,
-                    }}
-                  >
-                    <Text style={{
-                      color: '#FFFFFF',
-                      fontWeight: '800',
-                    }}>
-                      {generatingImage ? 'Creating…' : 'Generate'}
-                    </Text>
-                  </Pressable>
-                </View>
-              </View>
-            )}
-
-            <TextInput
-              value={input}
-              onChangeText={setInput}
-              placeholder={
-                researchMode
-                  ? 'Research a topic or paste a webpage URL…'
-                  : 'Ask BRITUME anything…'
-              }
-              placeholderTextColor={p.muted}
-              multiline
-              style={{
-                ...inset(p, 17),
-                color: p.text,
-                minHeight: 48,
-                maxHeight: 120,
-                fontSize: 16,
-                paddingHorizontal: 13,
-                paddingVertical: 11,
-              }}
-            />
-
-            <View style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginTop: 12,
-              gap: 7,
-            }}>
-              <View style={{
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                gap: 7,
-                flex: 1,
+          {imageMode && (
+            <View style={{ marginBottom: 10 }}>
+              <Text style={{
+                color: p.blue, fontWeight: '800', marginBottom: 7,
               }}>
-                <Pressable onPress={pickImage} style={actionStyle}>
-                  <Text style={actionText}>▧ Photo</Text>
+                IMAGE GENERATOR
+              </Text>
+              <TextInput
+                value={imagePrompt}
+                onChangeText={setImagePrompt}
+                placeholder="Describe the image you want…"
+                placeholderTextColor={p.muted}
+                multiline
+                style={{
+                  ...inset(p, 15), color: p.text,
+                  minHeight: 54, maxHeight: 100, padding: 12,
+                }}
+              />
+              <View style={{
+                flexDirection: 'row', justifyContent: 'flex-end',
+                gap: 10, marginTop: 9,
+              }}>
+                <Pressable onPress={() => setImageMode(false)} style={actionStyle}>
+                  <Text style={actionText}>Cancel</Text>
                 </Pressable>
-
-                <Pressable onPress={pickDocument} style={actionStyle}>
-                  <Text style={actionText}>＋ File</Text>
-                </Pressable>
-
                 <Pressable
-                  onPress={toggleRecording}
-                  disabled={transcribing}
-                  style={actionStyle}
+                  onPress={generateImage}
+                  disabled={generatingImage || !imagePrompt.trim()}
+                  style={{
+                    ...actionStyle, backgroundColor: p.red,
+                    opacity: generatingImage || !imagePrompt.trim() ? 0.45 : 1,
+                  }}
                 >
-                  <Text style={{
-                    ...actionText,
-                    color: recording ? p.red : p.text,
-                  }}>
-                    {recording ? '■ Stop' : transcribing ? '…' : '◉ Voice'}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setImageMode(value => !value)}
-                  style={actionStyle}
-                >
-                  <Text style={{ ...actionText, color: p.blue }}>
-                    Image
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setResearchMode(value => !value)}
-                  style={actionStyle}
-                >
-                  <Text style={{
-                    ...actionText,
-                    color: researchMode ? p.red : p.blue,
-                  }}>
-                    Web
+                  <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>
+                    {generatingImage ? 'Creating…' : 'Generate'}
                   </Text>
                 </Pressable>
               </View>
+            </View>
+          )}
 
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder={researchMode
+              ? 'Research a topic or paste a webpage URL…'
+              : 'Ask BRITUME anything…'}
+            placeholderTextColor={p.muted}
+            multiline
+            style={{
+              ...inset(p, 17), color: p.text,
+              minHeight: 48, maxHeight: 120, fontSize: 16,
+              paddingHorizontal: 13, paddingVertical: 11,
+            }}
+          />
+
+          <View style={{
+            flexDirection: 'row', justifyContent: 'space-between',
+            alignItems: 'center', marginTop: 12, gap: 7,
+          }}>
+            <View style={{
+              flexDirection: 'row', flexWrap: 'wrap', gap: 7, flex: 1,
+            }}>
+              <Pressable onPress={pickImage} style={actionStyle}>
+                <Text style={actionText}>▧ Photo</Text>
+              </Pressable>
+              <Pressable onPress={pickDocument} style={actionStyle}>
+                <Text style={actionText}>＋ File</Text>
+              </Pressable>
               <Pressable
-                onPress={send}
-                disabled={sending || !input.trim()}
-                style={{
-                  ...raised(p, 16),
-                  backgroundColor: p.blue,
-                  borderColor: p.blue,
-                  paddingHorizontal: 17,
-                  paddingVertical: 13,
-                  opacity: sending || !input.trim() ? 0.45 : 1,
-                }}
+                onPress={toggleRecording}
+                disabled={transcribing}
+                style={actionStyle}
               >
                 <Text style={{
-                  color: '#FFFFFF',
-                  fontWeight: '900',
+                  ...actionText, color: recording ? p.red : p.text,
                 }}>
-                  {sending ? '…' : researchMode ? 'Research ↗' : 'Send ↑'}
+                  {recording ? '■ Stop' : transcribing ? '…' : '◉ Voice'}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setImageMode(value => !value)}
+                style={actionStyle}
+              >
+                <Text style={{ ...actionText, color: p.blue }}>Image</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setResearchMode(value => !value)}
+                style={actionStyle}
+              >
+                <Text style={{
+                  ...actionText, color: researchMode ? p.red : p.blue,
+                }}>
+                  Web
                 </Text>
               </Pressable>
             </View>
-          </View>
 
-          <Text style={{
-            color: p.muted,
-            opacity: 0.75,
-            fontSize: 10,
-            textAlign: 'center',
-            marginTop: 10,
+            <Pressable
+              onPress={send}
+              disabled={sending || !input.trim()}
+              style={{
+                ...raised(p, 16), backgroundColor: p.blue,
+                borderColor: p.blue, paddingHorizontal: 17,
+                paddingVertical: 13,
+                opacity: sending || !input.trim() ? 0.45 : 1,
+              }}
+            >
+              <Text style={{ color: '#FFFFFF', fontWeight: '900' }}>
+                {sending ? '…' : researchMode ? 'Research ↗' : 'Send ↑'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <Text style={{
+          color: p.muted, opacity: 0.75, fontSize: 10,
+          textAlign: 'center', marginTop: 10,
+        }}>
+          BRITUME can make mistakes. Check important information.
+        </Text>
+      </View>
+
+      {/* Left-side history drawer */}
+      {showHistory && (
+        <View style={{
+          position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
+          backgroundColor: 'rgba(0,0,0,0.42)', zIndex: 20,
+          flexDirection: 'row',
+        }}>
+          <Pressable
+            onPress={closeHistory}
+            style={{ flex: 1 }}
+          />
+          <Animated.View style={{
+            position: 'absolute', left: 0, top: 0, bottom: 0,
+            width: 310, maxWidth: '86%',
+            backgroundColor: p.bg,
+            paddingTop: Platform.OS === 'web' ? 22 : 55,
+            paddingHorizontal: 17,
+            borderRightWidth: 1,
+            borderColor: p.border,
+            transform: [{ translateX: drawerX }],
           }}>
-            BRITUME can make mistakes. Check important information.
-          </Text>
+            <View style={{
+              flexDirection: 'row', justifyContent: 'space-between',
+              alignItems: 'center', marginBottom: 20,
+            }}>
+              <Text style={{
+                color: p.text, fontSize: 21, fontWeight: '900',
+              }}>
+                History
+              </Text>
+              <Pressable onPress={closeHistory} style={actionStyle}>
+                <Text style={actionText}>✕</Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              onPress={startNewConversation}
+              style={{
+                ...raised(p, 15), padding: 14,
+                marginBottom: 18, alignItems: 'center',
+              }}
+            >
+              <Text style={{ color: p.blue, fontWeight: '900' }}>
+                ＋ New conversation
+              </Text>
+            </Pressable>
+
+            {loadingHistory ? (
+              <Text style={{ color: p.muted }}>Loading history…</Text>
+            ) : conversations.length === 0 ? (
+              <Text style={{ color: p.muted }}>
+                Your saved conversations will appear here.
+              </Text>
+            ) : (
+              <FlatList
+                data={conversations}
+                keyExtractor={item => item.id}
+                renderItem={({ item }) => (
+                  <View style={{
+                    ...raised(p, 15), padding: 13,
+                    marginBottom: 11, flexDirection: 'row',
+                    alignItems: 'center', gap: 8,
+                  }}>
+                    <Pressable
+                      onPress={() => openConversation(item)}
+                      style={{ flex: 1 }}
+                    >
+                      <Text
+                        numberOfLines={2}
+                        style={{
+                          color: p.text, fontSize: 14, fontWeight: '700',
+                        }}
+                      >
+                        {item.title}
+                      </Text>
+                      <Text style={{
+                        color: p.muted, fontSize: 10, marginTop: 5,
+                      }}>
+                        {new Date(item.updated_at).toLocaleString()}
+                      </Text>
+                    </Pressable>
+                    <Pressable onPress={() => deleteConversation(item)}>
+                      <Text style={{ color: p.red, padding: 5 }}>Delete</Text>
+                    </Pressable>
+                  </View>
+                )}
+              />
+            )}
+          </Animated.View>
         </View>
       )}
 
+      {/* All app controls are inside Settings */}
       <Modal
         visible={showSettings}
         transparent
@@ -995,32 +821,22 @@ export default function Chat() {
         onRequestClose={() => setShowSettings(false)}
       >
         <View style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.65)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: 22,
+          flex: 1, backgroundColor: 'rgba(0,0,0,0.65)',
+          justifyContent: 'center', alignItems: 'center', padding: 20,
         }}>
           <View style={{
-            ...raised(p, 28),
-            width: '100%',
-            maxWidth: 390,
-            padding: 22,
+            ...raised(p, 27), width: '100%', maxWidth: 390, padding: 21,
+            maxHeight: '88%',
           }}>
             <View style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: 22,
+              flexDirection: 'row', justifyContent: 'space-between',
+              alignItems: 'center', marginBottom: 20,
             }}>
               <Text style={{
-                color: p.text,
-                fontSize: 24,
-                fontWeight: '900',
+                color: p.text, fontSize: 24, fontWeight: '900',
               }}>
                 Settings
               </Text>
-
               <Pressable
                 onPress={() => setShowSettings(false)}
                 style={actionStyle}
@@ -1030,102 +846,73 @@ export default function Chat() {
             </View>
 
             <Text style={{
-              color: p.blue,
-              fontSize: 12,
-              fontWeight: '900',
-              letterSpacing: 1.5,
-              marginBottom: 12,
+              color: p.blue, fontSize: 12, fontWeight: '900',
+              letterSpacing: 1.4, marginBottom: 10,
             }}>
               APPEARANCE
             </Text>
 
             <View style={{
-              ...raised(p, 18),
-              padding: 16,
-              marginBottom: 18,
-              flexDirection: 'row',
+              ...raised(p, 17), padding: 14, marginBottom: 15,
+              flexDirection: 'row', alignItems: 'center',
               justifyContent: 'space-between',
-              alignItems: 'center',
             }}>
               <View style={{ flex: 1 }}>
                 <Text style={{
-                  color: p.text,
-                  fontSize: 15,
-                  fontWeight: '800',
+                  color: p.text, fontSize: 15, fontWeight: '800',
                 }}>
                   {darkMode ? 'Pure black mode' : 'Milk white mode'}
                 </Text>
                 <Text style={{
-                  color: p.muted,
-                  fontSize: 12,
-                  marginTop: 5,
+                  color: p.muted, fontSize: 12, marginTop: 4,
                 }}>
                   {darkMode ? 'Dark neumorphism' : 'Light neumorphism'}
                 </Text>
               </View>
-
               <Pressable
                 onPress={() => setDarkMode(value => !value)}
                 style={{
-                  ...raised(p, 14),
-                  backgroundColor: p.blue,
-                  borderColor: p.blue,
-                  paddingHorizontal: 15,
-                  paddingVertical: 10,
+                  ...raised(p, 13), backgroundColor: p.blue,
+                  borderColor: p.blue, paddingHorizontal: 14, paddingVertical: 10,
                 }}
               >
-                <Text style={{
-                  color: '#FFFFFF',
-                  fontWeight: '900',
-                }}>
+                <Text style={{ color: '#FFFFFF', fontWeight: '900' }}>
                   {darkMode ? '☀ Light' : '◐ Dark'}
                 </Text>
               </Pressable>
             </View>
 
             <Text style={{
-              color: p.blue,
-              fontSize: 12,
-              fontWeight: '900',
-              letterSpacing: 1.5,
-              marginBottom: 12,
+              color: p.blue, fontSize: 12, fontWeight: '900',
+              letterSpacing: 1.4, marginBottom: 10,
             }}>
               MESSAGE EFFECTS
             </Text>
 
             <View style={{
-              ...raised(p, 18),
-              padding: 16,
-              marginBottom: 22,
-              flexDirection: 'row',
+              ...raised(p, 17), padding: 14, marginBottom: 18,
+              flexDirection: 'row', alignItems: 'center',
               justifyContent: 'space-between',
-              alignItems: 'center',
             }}>
               <View style={{ flex: 1 }}>
                 <Text style={{
-                  color: p.text,
-                  fontSize: 15,
-                  fontWeight: '800',
+                  color: p.text, fontSize: 15, fontWeight: '800',
                 }}>
                   Red and blue flash
                 </Text>
                 <Text style={{
-                  color: p.muted,
-                  fontSize: 12,
-                  marginTop: 5,
+                  color: p.muted, fontSize: 12, marginTop: 4,
                 }}>
                   Flash when messages are sent or received.
                 </Text>
               </View>
-
               <Pressable
                 onPress={() => setMessageEffectsEnabled(value => !value)}
                 style={{
-                  ...raised(p, 14),
+                  ...raised(p, 13),
                   backgroundColor: messageEffectsEnabled ? p.blue : p.surface,
                   borderColor: messageEffectsEnabled ? p.blue : p.border,
-                  paddingHorizontal: 15,
-                  paddingVertical: 10,
+                  paddingHorizontal: 15, paddingVertical: 10,
                 }}
               >
                 <Text style={{
@@ -1137,20 +924,67 @@ export default function Chat() {
               </Pressable>
             </View>
 
+            <Text style={{
+              color: p.blue, fontSize: 12, fontWeight: '900',
+              letterSpacing: 1.4, marginBottom: 10,
+            }}>
+              CHAT
+            </Text>
+
             <Pressable
-              onPress={() => setShowSettings(false)}
+              onPress={() => {
+                setShowSettings(false);
+                openHistory();
+              }}
               style={{
-                ...raised(p, 16),
-                backgroundColor: p.blue,
-                borderColor: p.blue,
-                padding: 14,
-                alignItems: 'center',
+                ...raised(p, 15), padding: 14, marginBottom: 11,
+                flexDirection: 'row', alignItems: 'center',
               }}
             >
               <Text style={{
-                color: '#FFFFFF',
-                fontWeight: '900',
-                fontSize: 15,
+                color: p.text, fontWeight: '800', fontSize: 15,
+              }}>
+                ☷  Conversation history
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={startNewConversation}
+              style={{
+                ...raised(p, 15), padding: 14, marginBottom: 11,
+                flexDirection: 'row', alignItems: 'center',
+              }}
+            >
+              <Text style={{
+                color: p.text, fontWeight: '800', fontSize: 15,
+              }}>
+                ＋  New chat
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={signOut}
+              style={{
+                ...raised(p, 15), padding: 14, marginBottom: 18,
+                flexDirection: 'row', alignItems: 'center',
+              }}
+            >
+              <Text style={{
+                color: p.red, fontWeight: '800', fontSize: 15,
+              }}>
+                ⇥  Sign out
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => setShowSettings(false)}
+              style={{
+                ...raised(p, 15), backgroundColor: p.blue,
+                borderColor: p.blue, padding: 14, alignItems: 'center',
+              }}
+            >
+              <Text style={{
+                color: '#FFFFFF', fontWeight: '900', fontSize: 15,
               }}>
                 Done
               </Text>
@@ -1159,35 +993,23 @@ export default function Chat() {
         </View>
       </Modal>
 
+      {/* Red and blue message flash */}
       <Animated.View
         pointerEvents="none"
         style={{
-          position: 'absolute',
-          top: 0,
-          bottom: 0,
-          left: 0,
-          right: 0,
-          opacity: pulse,
+          position: 'absolute', top: 0, bottom: 0,
+          left: 0, right: 0, opacity: pulse,
         }}
       >
         <View style={{
-          position: 'absolute',
-          top: 0,
-          bottom: 0,
-          left: 0,
-          width: '22%',
-          backgroundColor: p.red,
+          position: 'absolute', top: 0, bottom: 0,
+          left: 0, width: '22%', backgroundColor: p.red,
         }} />
-
         <View style={{
-          position: 'absolute',
-          top: 0,
-          bottom: 0,
-          right: 0,
-          width: '22%',
-          backgroundColor: p.blue,
+          position: 'absolute', top: 0, bottom: 0,
+          right: 0, width: '22%', backgroundColor: p.blue,
         }} />
       </Animated.View>
     </KeyboardAvoidingView>
   );
-}
+    }
